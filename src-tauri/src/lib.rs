@@ -61,6 +61,18 @@ fn set_tray_state(state: String, app: AppHandle) {
 }
 
 #[tauri::command]
+async fn search(
+    query: String,
+    app: AppHandle,
+) -> Result<Vec<ytdlp::SearchResult>, String> {
+    let trimmed = query.trim();
+    if trimmed.is_empty() {
+        return Err("Search query is empty".to_string());
+    }
+    ytdlp::search_music(&app, trimmed).await
+}
+
+#[tauri::command]
 async fn play(
     url: String,
     app: AppHandle,
@@ -207,6 +219,7 @@ pub fn run() {
             hide_window,
             resize_window,
             set_tray_state,
+            search,
             play,
             toggle_pause,
             stop,

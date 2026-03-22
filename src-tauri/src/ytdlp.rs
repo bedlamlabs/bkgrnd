@@ -143,6 +143,109 @@ pub struct PlaylistResult {
     pub title: String,
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchResult {
+    pub title: String,
+    pub url: String,
+    pub video_id: String,
+    pub thumbnail: String,
+    pub duration: Option<f64>,
+    pub channel: String,
+    pub track_count: Option<u64>,
+}
+
+pub async fn search_music(app: &AppHandle, query: &str) -> Result<Vec<SearchResult>, String> {
+    let lower = query.to_lowercase();
+    let is_playlist_search = lower.contains("playlist");
+
+    let search_arg = if is_playlist_search {
+        let clean: Vec<&str> = lower
+            .split_whitespace()
+            .filter(|w| *w != "playlist")
+            .collect();
+        let mut search_url =
+            url::Url::parse("https://www.youtube.com/results").unwrap();
+        search_url
+            .query_pairs_mut()
+            .append_pair("search_query", &clean.join(" "))
+            .append_pair("sp", "EgIQAw==");
+        search_url.to_string()
+    } else {
+        format!("ytsearch10:{} music", query)
+    };
+
+    let output = app
+        .shell()
+        .sidecar("yt-dlp")
+        .map_err(|e| format!("Failed to create yt-dlp sidecar: {}", e))?
+        .args(["--flat-playlist", "--dump-json", &search_arg])
+        .output()
+        .await
+        .map_err(|e| format!("yt-dlp search failed: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("yt-dlp search failed: {}", stderr.trim()));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut results = Vec::new();
+
+    for line in stdout.lines().filter(|l| !l.is_empty()) {
+        if results.len() >= 10 {
+            break;
+        }
+        if let Ok(entry) = serde_json::from_str::<serde_json::Value>(line) {
+            let id = match entry["id"].as_str() {
+                Some(id) => id,
+                None => continue,
+            };
+
+            if is_playlist_search {
+                let n_entries = entry["playlist_count"]
+                    .as_u64()
+                    .or_else(|| entry["n_entries"].as_u64());
+                let thumb = entry["thumbnails"]
+                    .as_array()
+                    .and_then(|t| t.first())
+                    .and_then(|t| t["url"].as_str())
+                    .unwrap_or("")
+                    .to_string();
+
+                results.push(SearchResult {
+                    title: entry["title"]
+                        .as_str()
+                        .unwrap_or("Unknown Playlist")
+                        .to_string(),
+                    url: format!("https://www.youtube.com/playlist?list={}", id),
+                    video_id: String::new(),
+                    thumbnail: thumb,
+                    duration: None,
+                    channel: entry["channel"]
+                        .as_str()
+                        .or_else(|| entry["uploader"].as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    track_count: n_entries,
+                });
+            } else {
+                results.push(SearchResult {
+                    title: entry["title"].as_str().unwrap_or("Unknown").to_string(),
+                    url: format!("https://www.youtube.com/watch?v={}", id),
+                    video_id: id.to_string(),
+                    thumbnail: thumbnail_url(id),
+                    duration: entry["duration"].as_f64(),
+                    channel: entry["channel"].as_str().unwrap_or("").to_string(),
+                    track_count: None,
+                });
+            }
+        }
+    }
+
+    Ok(results)
+}
+
 pub async fn enumerate_playlist(app: &AppHandle, url: &str) -> Result<PlaylistResult, String> {
     let output = app
         .shell()

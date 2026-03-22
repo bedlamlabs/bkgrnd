@@ -31,6 +31,12 @@ const playIcon = document.getElementById('playIcon');
 const playingHistory = document.getElementById('playingHistory');
 const playingHistoryList = document.getElementById('playingHistoryList');
 
+const searchResults = document.getElementById('searchResults');
+const searchResultsList = document.getElementById('searchResultsList');
+const clearSearchBtn = document.getElementById('clearSearchBtn');
+const idleHistorySection = document.getElementById('idleHistorySection');
+const loadingText = document.getElementById('loadingText');
+
 // ── State ──
 
 let currentState = 'idle';
@@ -39,6 +45,7 @@ let historyExpanded = false;
 let playingHistoryVisible = false;
 let historyData = [];
 let volumeInitialized = false;
+let searchVisible = false;
 
 // ── View Management ──
 
@@ -64,11 +71,19 @@ function resizeWindow(height) {
 }
 
 function computeIdleHeight() {
-  const itemCount = historyList.children.length;
-  const base = 107;
-  const perItem = 40;
-  const height = base + (itemCount * perItem) + 8;
-  resizeWindow(Math.max(height, 120));
+  if (searchVisible) {
+    const itemCount = searchResultsList.children.length;
+    const base = 80; // input + loading + section header
+    const perItem = 40;
+    const height = base + (itemCount * perItem) + 8;
+    resizeWindow(Math.max(height, 120));
+  } else {
+    const itemCount = historyList.children.length;
+    const base = 107;
+    const perItem = 40;
+    const height = base + (itemCount * perItem) + 8;
+    resizeWindow(Math.max(height, 120));
+  }
 }
 
 // ── Status Polling ──
@@ -295,12 +310,108 @@ function computePlayingHeight() {
   resizeWindow(base + (itemCount * perItem) + padding);
 }
 
+// ── Input Detection ──
+
+function isUrl(input) {
+  return /^https?:\/\//i.test(input) || /^(www\.)?(youtube\.com|youtu\.be|music\.youtube\.com)/i.test(input);
+}
+
+// ── Search ──
+
+async function doSearch(query) {
+  if (!query) return;
+
+  errorEl.classList.add('hidden');
+  loadingText.textContent = 'Searching...';
+  loadingEl.classList.remove('hidden');
+
+  try {
+    const results = await invoke('search', { query });
+    showSearchResults(results);
+  } catch (err) {
+    errorEl.textContent = typeof err === 'string' ? err : (err.message || 'Search failed');
+    errorEl.classList.remove('hidden');
+  } finally {
+    loadingEl.classList.add('hidden');
+  }
+}
+
+function showSearchResults(results) {
+  searchResultsList.innerHTML = '';
+
+  if (!results || results.length === 0) {
+    searchResultsList.innerHTML = '<div class="history-empty">No results found</div>';
+    searchResults.classList.remove('hidden');
+    idleHistorySection.classList.add('hidden');
+    searchVisible = true;
+    computeIdleHeight();
+    return;
+  }
+
+  for (const item of results) {
+    const el = document.createElement('div');
+    el.className = 'history-item';
+    el.setAttribute('role', 'button');
+    el.tabIndex = 0;
+
+    const isPlaylist = item.trackCount != null;
+    const durationStr = item.duration ? formatDuration(item.duration) : '';
+    const trackStr = isPlaylist && item.trackCount ? `${item.trackCount} tracks` : '';
+    const meta = [item.channel, trackStr, durationStr].filter(Boolean).join(' \u2022 ');
+
+    el.innerHTML = `
+      ${item.thumbnail ? `<img class="history-thumb" src="${escapeAttr(item.thumbnail)}" alt="" />` : '<div class="history-thumb"></div>'}
+      <div class="history-info">
+        <div class="history-title">${escapeHtml(item.title)}</div>
+        <div class="history-meta">${escapeHtml(meta)}</div>
+      </div>
+      <div class="history-play-icon">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+          <path d="M3 1.5L12 7L3 12.5V1.5Z" fill="currentColor"/>
+        </svg>
+      </div>
+    `;
+
+    const playUrlForItem = isPlaylist
+      ? item.url
+      : `https://www.youtube.com/watch?v=${item.videoId}&list=RD${item.videoId}`;
+
+    el.addEventListener('click', () => {
+      clearSearch();
+      playUrl(playUrlForItem);
+    });
+    el.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        clearSearch();
+        playUrl(playUrlForItem);
+      }
+    });
+
+    searchResultsList.appendChild(el);
+  }
+
+  searchResults.classList.remove('hidden');
+  idleHistorySection.classList.add('hidden');
+  searchVisible = true;
+  computeIdleHeight();
+}
+
+function clearSearch() {
+  searchResults.classList.add('hidden');
+  searchResultsList.innerHTML = '';
+  idleHistorySection.classList.remove('hidden');
+  searchVisible = false;
+  urlInput.value = '';
+  computeIdleHeight();
+}
+
 // ── Play URL ──
 
 async function playUrl(url) {
   if (!url) return;
 
   errorEl.classList.add('hidden');
+  loadingText.textContent = 'Connecting...';
   loadingEl.classList.remove('hidden');
 
   try {
@@ -381,13 +492,28 @@ urlInput.addEventListener('input', () => {
 
 urlInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && urlInput.value.trim()) {
-    playUrl(urlInput.value.trim());
+    const input = urlInput.value.trim();
+    if (isUrl(input)) {
+      clearSearch();
+      playUrl(input);
+    } else {
+      doSearch(input);
+    }
+  }
+  if (e.key === 'Escape' && searchVisible) {
+    e.stopPropagation();
+    clearSearch();
   }
 });
 
 urlInputPlaying.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && urlInputPlaying.value.trim()) {
-    playUrl(urlInputPlaying.value.trim());
+    const input = urlInputPlaying.value.trim();
+    if (isUrl(input)) {
+      playUrl(input);
+    } else {
+      doSearch(input);
+    }
   }
 });
 
@@ -417,6 +543,11 @@ volumeSlider.addEventListener('input', () => {
 showMoreBtn.addEventListener('click', () => {
   historyExpanded = !historyExpanded;
   renderHistory();
+});
+
+clearSearchBtn.addEventListener('click', () => {
+  clearSearch();
+  urlInput.focus();
 });
 
 document.addEventListener('keydown', (e) => {
@@ -452,6 +583,15 @@ function extractVideoId(url) {
   if (!url) return null;
   const m = url.match(/(?:v=|youtu\.be\/|\/shorts\/)([a-zA-Z0-9_-]{11})/);
   return m ? m[1] : null;
+}
+
+function formatDuration(seconds) {
+  if (!seconds || seconds <= 0) return '';
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = Math.floor(seconds % 60);
+  if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  return `${m}:${String(s).padStart(2, '0')}`;
 }
 
 function formatRelativeTime(isoStr) {

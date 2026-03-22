@@ -118,15 +118,13 @@ pub async fn play(url: &str, app: AppHandle, state: SharedState) -> Result<Playe
             s.playlist_title = String::new();
         }
 
-        if info.is_live {
-            history::add_to_history(
-                url,
-                &info.title,
-                &ytdlp::thumbnail_url(&video_id),
-                "stream",
-                None,
-            );
-        }
+        history::add_to_history(
+            url,
+            &info.title,
+            &ytdlp::thumbnail_url(&video_id),
+            if info.is_live { "stream" } else { "video" },
+            None,
+        );
 
         play_queue_item(0, app, state.clone()).await?;
         get_status(state).await

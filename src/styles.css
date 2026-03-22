@@ -215,6 +215,14 @@ body {
   padding: 12px 0;
 }
 
+/* ── Search Results ── */
+
+.search-results {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
 /* ── Playing History (inline) ── */
 
 .playing-history {

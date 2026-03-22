@@ -15,21 +15,30 @@
         type="text"
         id="urlInput"
         class="url-input"
-        placeholder="Paste YouTube URL"
+        placeholder="Search or Paste URL"
         autocomplete="off"
         spellcheck="false"
       />
       <div id="error" class="error hidden"></div>
       <div id="loading" class="loading hidden">
         <div class="spinner"></div>
-        <span>Connecting...</span>
+        <span id="loadingText">Connecting...</span>
       </div>
-      <div class="divider"></div>
-      <div class="section-header">
-        <span class="section-title">Recent</span>
-        <button class="show-more" id="showMoreBtn">Show All</button>
+      <div id="searchResults" class="search-results hidden">
+        <div class="section-header">
+          <span class="section-title">Results</span>
+          <button class="show-more" id="clearSearchBtn">Clear</button>
+        </div>
+        <div class="history-list" id="searchResultsList"></div>
       </div>
-      <div class="history-list" id="historyList"></div>
+      <div id="idleHistorySection">
+        <div class="divider"></div>
+        <div class="section-header">
+          <span class="section-title">Recent</span>
+          <button class="show-more" id="showMoreBtn">Show All</button>
+        </div>
+        <div class="history-list" id="historyList"></div>
+      </div>
     </div>
 
     <!-- Playing View -->
@@ -101,7 +110,7 @@
         type="text"
         id="urlInputPlaying"
         class="url-input small"
-        placeholder="Play something else..."
+        placeholder="Search or Paste URL..."
         autocomplete="off"
         spellcheck="false"
       />
