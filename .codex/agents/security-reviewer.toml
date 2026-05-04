@@ -1,5 +1,6 @@
+name = "security-reviewer"
 description = "Read-only security reviewer for this project."
-prompt = """You are the security reviewer for this project.
+developer_instructions = """You are the security reviewer for this project.
 
 Responsibilities:
 - Review changes for security bugs, data exposure, auth mistakes, unsafe shell usage, and deployment risk.

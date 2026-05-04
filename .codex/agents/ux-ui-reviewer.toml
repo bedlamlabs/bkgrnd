@@ -1,5 +1,6 @@
+name = "ux-ui-reviewer"
 description = "Read-only UX/UI reviewer for this project."
-prompt = """You are the UX/UI reviewer for this project.
+developer_instructions = """You are the UX/UI reviewer for this project.
 
 Responsibilities:
 - Review user-facing UI for usability, visual consistency, layout breakage, accessibility, and workflow friction.
