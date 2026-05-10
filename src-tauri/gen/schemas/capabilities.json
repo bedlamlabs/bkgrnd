@@ -1,1 +1,1 @@
-{"default":{"identifier":"default","description":"Default capabilities for bkgrnd","local":true,"windows":["main"],"permissions":["core:default","core:window:allow-set-size","positioner:default","shell:default"]}}
+{"default":{"identifier":"default","description":"Default capabilities for bkgrnd","local":true,"windows":["main"],"permissions":["core:default","core:window:allow-set-size","positioner:default","shell:default","process:default"]}}

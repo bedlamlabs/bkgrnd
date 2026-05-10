@@ -168,6 +168,7 @@ body {
   object-fit: cover;
   background: rgba(255, 255, 255, 0.05);
   flex-shrink: 0;
+  cursor: pointer;
 }
 
 .history-info {
@@ -244,6 +245,10 @@ body {
   overflow: hidden;
   flex-shrink: 0;
   background: rgba(255, 255, 255, 0.05);
+}
+
+.np-thumbnail.clickable {
+  cursor: pointer;
 }
 
 .np-thumbnail img {
@@ -405,14 +410,40 @@ body {
 
 /* ── Offline ── */
 
-.offline {
+.offline-content {
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 6px;
-  padding: 12px;
+  gap: 12px;
+  padding: 20px 12px;
+}
+
+.offline-message {
   color: rgba(255, 255, 255, 0.4);
   font-size: 12px;
+}
+
+.restart-btn {
+  padding: 8px 24px;
+  border-radius: 6px;
+  border: none;
+  background: #4a9eff;
+  color: white;
+  font-size: 13px;
+  font-weight: 500;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.restart-btn:hover {
+  background: #3d8ee6;
+}
+
+.restart-btn:active {
+  background: #3580d4;
+  transform: scale(0.97);
 }
 
 /* ── Light Mode ── */
@@ -518,7 +549,7 @@ body {
     border-top-color: rgba(0, 0, 0, 0.5);
   }
 
-  .offline {
+  .offline-message {
     color: rgba(0, 0, 0, 0.35);
   }
 
