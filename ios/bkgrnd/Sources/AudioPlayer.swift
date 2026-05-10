@@ -14,7 +14,8 @@ final class AudioPlayer: ObservableObject {
   func play(url: URL, headers: [String: String], title: String, artist: String, artworkURL: String?) async {
     configureAudioSession()
 
-    let asset = AVURLAsset(url: url, options: headers.isEmpty ? nil : [AVURLAssetHTTPHeaderFieldsKey: headers])
+    let assetOptions: [String: Any]? = headers.isEmpty ? nil : ["AVURLAssetHTTPHeaderFieldsKey": headers]
+    let asset = AVURLAsset(url: url, options: assetOptions)
     let item = AVPlayerItem(asset: asset)
     let p = AVPlayer(playerItem: item)
     player = p
@@ -24,7 +25,10 @@ final class AudioPlayer: ObservableObject {
       self.timeObserver = nil
     }
 
-    timeObserver = p.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.5, preferredTimescale: 600), queue: .main) { [weak self] t in
+    timeObserver = p.addPeriodicTimeObserver(
+      forInterval: CMTime(seconds: 0.5, preferredTimescale: 600),
+      queue: DispatchQueue.main
+    ) { [weak self] (t: CMTime) in
       guard let self else { return }
       self.currentTime = t.seconds
       if let d = p.currentItem?.duration.seconds, d.isFinite {
