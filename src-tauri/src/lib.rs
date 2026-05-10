@@ -1,6 +1,9 @@
+mod config;
 mod history;
 mod mpv;
+mod playlists;
 mod player;
+mod wopr_sync;
 mod ytdlp;
 
 use player::{PlayerStatus, SharedState};
@@ -158,6 +161,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_positioner::init())
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_process::init())
         .manage(Arc::new(Mutex::new(player::PlayerState::new())) as SharedState)
         .setup(|app| {
             #[cfg(target_os = "macos")]
@@ -211,6 +215,11 @@ pub fn run() {
                     }
                 });
             }
+
+            // Best-effort playlist sync to WOPR (no UI impact; safe to fail)
+            tauri::async_runtime::spawn(async {
+                wopr_sync::sync_loop().await;
+            });
 
             Ok(())
         })

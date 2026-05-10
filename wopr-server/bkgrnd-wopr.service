@@ -1,0 +1,24 @@
+[Unit]
+Description=bkgrnd WOPR backend
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/bkgrnd/wopr-server
+ExecStart=/opt/bkgrnd/wopr-server/target/release/wopr_server
+Restart=always
+RestartSec=2
+
+# Data + auth
+Environment=WOPR_BIND=0.0.0.0:808
+Environment=WOPR_DATA_DIR=/var/lib/bkgrnd
+# Environment=WOPR_BEARER_TOKEN=change-me
+
+# Ensure we can bind/serve
+User=bkgrnd
+Group=bkgrnd
+
+[Install]
+WantedBy=multi-user.target
+

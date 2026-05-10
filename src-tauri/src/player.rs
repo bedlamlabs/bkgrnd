@@ -16,6 +16,7 @@ pub struct PlayerStatus {
     pub mode: Option<String>,
     pub thumbnail: String,
     pub video_id: String,
+    pub source_url: String,
     pub queue_position: usize,
     pub queue_length: usize,
     pub playlist_title: String,
@@ -30,6 +31,7 @@ impl PlayerStatus {
             mode: None,
             thumbnail: String::new(),
             video_id: String::new(),
+            source_url: String::new(),
             queue_position: 0,
             queue_length: 0,
             playlist_title: String::new(),
@@ -325,6 +327,7 @@ pub async fn get_status(state: SharedState) -> Result<PlayerStatus, String> {
         mode: Some("ytdlp".to_string()),
         thumbnail: current_item.map(|i| i.thumbnail.clone()).unwrap_or_default(),
         video_id: current_item.map(|i| i.video_id.clone()).unwrap_or_default(),
+        source_url: current_item.map(|i| i.url.clone()).unwrap_or_default(),
         queue_position: if s.queue_index >= 0 {
             s.queue_index as usize
         } else {

@@ -4,6 +4,8 @@ const { invoke } = window.__TAURI__.core;
 
 const idleView = document.getElementById('idleView');
 const playingView = document.getElementById('playingView');
+const offlineView = document.getElementById('offlineView');
+const restartBtn = document.getElementById('restartBtn');
 
 const urlInput = document.getElementById('urlInput');
 const urlInputPlaying = document.getElementById('urlInputPlaying');
@@ -46,12 +48,94 @@ let playingHistoryVisible = false;
 let historyData = [];
 let volumeInitialized = false;
 let searchVisible = false;
+let failCount = 0;
+
+// ── External Links ──
+
+async function openExternalUrl(url) {
+  if (!url) return;
+  try {
+    const shell = window.__TAURI__?.shell;
+    if (shell?.open) {
+      await shell.open(url);
+      return;
+    }
+  } catch {}
+
+  try {
+    await invoke('plugin:shell|open', { path: url });
+    return;
+  } catch {}
+
+  try {
+    window.open(url, '_blank', 'noopener,noreferrer');
+  } catch {}
+}
+
+function youtubeWatchUrl(videoId) {
+  if (!videoId) return null;
+  return `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}`;
+}
+
+function wireThumbnailOpen(el, url, { stopPropagation = false } = {}) {
+  if (!el) return;
+  const finalUrl = canonicalizeYoutubeUrl(url);
+  if (!finalUrl) return;
+
+  el.classList.add('clickable');
+  el.setAttribute('role', 'button');
+  el.tabIndex = 0;
+  el.title = 'Open on YouTube';
+
+  el.addEventListener('click', (e) => {
+    if (stopPropagation) e.stopPropagation();
+    openExternalUrl(finalUrl);
+  });
+  el.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      if (stopPropagation) e.stopPropagation();
+      openExternalUrl(finalUrl);
+    }
+  });
+}
+
+function canonicalizeYoutubeUrl(url) {
+  if (!url) return null;
+  try {
+    const u = new URL(url);
+    const host = u.hostname.toLowerCase();
+
+    if (host === 'music.youtube.com') {
+      u.hostname = 'www.youtube.com';
+      return u.toString();
+    }
+
+    if (host === 'youtu.be') {
+      const id = u.pathname.replace(/^\/+/, '').split('/')[0];
+      return youtubeWatchUrl(id);
+    }
+
+    if (host.endsWith('youtube.com')) {
+      if (u.pathname.startsWith('/shorts/')) {
+        const id = u.pathname.split('/')[2] || '';
+        return youtubeWatchUrl(id);
+      }
+      return u.toString();
+    }
+
+    return u.toString();
+  } catch {
+    return url;
+  }
+}
 
 // ── View Management ──
 
 function showView(view) {
   idleView.classList.add('hidden');
   playingView.classList.add('hidden');
+  offlineView.classList.add('hidden');
 
   if (view === 'idle') {
     idleView.classList.remove('hidden');
@@ -63,6 +147,9 @@ function showView(view) {
     } else {
       resizeWindow(260);
     }
+  } else if (view === 'offline') {
+    offlineView.classList.remove('hidden');
+    resizeWindow(120);
   }
 }
 
@@ -91,9 +178,14 @@ function computeIdleHeight() {
 async function fetchStatus() {
   try {
     const status = await invoke('get_status');
+    failCount = 0;
     applyStatus(status);
     return status;
   } catch {
+    failCount++;
+    if (failCount >= 3) {
+      showView('offline');
+    }
     return null;
   }
 }
@@ -121,6 +213,19 @@ function applyStatus(status) {
     } else {
       npThumbnail.innerHTML = '';
     }
+
+    npThumbnail.classList.remove('clickable');
+    npThumbnail.removeAttribute('role');
+    npThumbnail.tabIndex = -1;
+    npThumbnail.removeAttribute('tabindex');
+    npThumbnail.removeAttribute('title');
+    npThumbnail.removeAttribute('data-video-id');
+    npThumbnail.removeAttribute('data-open-url');
+
+    const openUrl = canonicalizeYoutubeUrl(status.sourceUrl) || youtubeWatchUrl(status.videoId);
+    npThumbnail.dataset.videoId = status.videoId;
+    npThumbnail.dataset.openUrl = openUrl || '';
+    wireThumbnailOpen(npThumbnail, openUrl);
 
     if (status.isPaused) {
       pauseIcon.classList.add('hidden');
@@ -232,6 +337,9 @@ function renderHistory() {
       if (e.key === 'Enter') playUrl(item.url);
     });
 
+    const thumbEl = el.querySelector('.history-thumb');
+    wireThumbnailOpen(thumbEl, item.url || youtubeWatchUrl(extractVideoId(item.url)), { stopPropagation: true });
+
     historyList.appendChild(el);
   }
 
@@ -297,6 +405,16 @@ function renderPlayingHistory() {
       e.preventDefault(); // prevent blur on the input
       playUrl(item.url);
     });
+
+    const thumbEl = el.querySelector('.history-thumb');
+    if (thumbEl) {
+      // Use mousedown so we don't blur the input; preserve existing behavior.
+      const finalUrl = canonicalizeYoutubeUrl(item.url) || youtubeWatchUrl(extractVideoId(item.url));
+      wireThumbnailOpen(thumbEl, finalUrl, { stopPropagation: true });
+      thumbEl.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+      });
+    }
 
     playingHistoryList.appendChild(el);
   }
@@ -386,6 +504,10 @@ function showSearchResults(results) {
         playUrl(playUrlForItem);
       }
     });
+
+    const thumbEl = el.querySelector('.history-thumb');
+    const openUrl = isPlaylist ? item.url : youtubeWatchUrl(item.videoId);
+    wireThumbnailOpen(thumbEl, openUrl, { stopPropagation: true });
 
     searchResultsList.appendChild(el);
   }
@@ -486,6 +608,8 @@ async function loadVolume() {
 
 // ── Event Listeners ──
 
+// (npThumbnail wiring handled in applyStatus)
+
 urlInput.addEventListener('input', () => {
   errorEl.classList.add('hidden');
 });
@@ -548,6 +672,10 @@ showMoreBtn.addEventListener('click', () => {
 clearSearchBtn.addEventListener('click', () => {
   clearSearch();
   urlInput.focus();
+});
+
+restartBtn.addEventListener('click', () => {
+  invoke('plugin:process|restart').catch(() => {});
 });
 
 document.addEventListener('keydown', (e) => {
