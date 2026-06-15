@@ -70,8 +70,6 @@ let activeResolveMeta = null;
 let remotePlayToken = 0;
 let playStartTimeout = null;
 let acquisitionTimer = null;
-let streamFallbackTimer = null;
-let triedProxyFallback = false;
 let lastProgressAt = 0;
 const prewarmed = new Set();
 const prewarming = new Set();
@@ -141,17 +139,12 @@ function stopAcquisitionStatus() {
   acquisitionTimer = null;
 }
 
-function stopStreamFallback() {
-  if (streamFallbackTimer) clearTimeout(streamFallbackTimer);
-  streamFallbackTimer = null;
-}
-
 function startAcquisitionStatus(sourceUrl) {
   stopAcquisitionStatus();
   const startedAt = Date.now();
-  const ready = prewarmed.has(sourceUrl);
   const update = () => {
     const elapsed = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
+    const ready = prewarmed.has(sourceUrl);
     if (ready) {
       setPlayerStatus(elapsed < 3 ? "starting" : `buffering ${formatElapsed(elapsed)}`);
     } else if (elapsed < 15) {
@@ -456,7 +449,6 @@ async function playRemote(item) {
   remoteNow = item;
   activeSourceItem = item;
   activeResolveMeta = null;
-  triedProxyFallback = false;
   renderMiniPlayer();
   renderPlayer();
 
@@ -466,8 +458,8 @@ async function playRemote(item) {
   if (!streamUrl) return;
 
   activeSourceUrl = sourceUrl;
-  activeStreamUrl = streamUrl;
-  audio.src = streamUrl;
+  activeStreamUrl = proxiedStreamUrl(sourceUrl);
+  audio.src = activeStreamUrl;
   try {
     audio.load();
     const promise = audio.play();
@@ -479,34 +471,25 @@ async function playRemote(item) {
     }
     if (playStartTimeout) clearTimeout(playStartTimeout);
     playStartTimeout = setTimeout(() => setPlayerStatus("buffering"), 900);
-    scheduleStreamFallback();
   } catch {
     cleanupFailedAudio();
     setPlayerStatus("tap");
   }
 }
 
-function scheduleStreamFallback() {
-  stopStreamFallback();
-  streamFallbackTimer = setTimeout(() => {
-    if (triedProxyFallback || isActivelyPlaying() || !activeSourceUrl) return;
-    triedProxyFallback = true;
-    setPlayerStatus("retrying");
-    const proxyUrl = new URL("api/v1/stream", apiBaseHref());
-    proxyUrl.searchParams.set("url", activeSourceUrl);
-    proxyUrl.searchParams.set("proxy", "true");
-    audio.src = withToken(proxyUrl.toString());
-    try {
-      audio.load();
-      audio.play().catch(() => {
-        cleanupFailedAudio();
-        setPlayerStatus("tap");
-      });
-    } catch {
-      cleanupFailedAudio();
-      setPlayerStatus("tap");
-    }
-  }, 12000);
+function proxiedStreamUrl(sourceUrl) {
+  const proxyUrl = new URL("api/v1/stream", apiBaseHref());
+  proxyUrl.searchParams.set("url", sourceUrl);
+  proxyUrl.searchParams.set("proxy", "true");
+  return withToken(proxyUrl.toString());
+}
+
+function resolveFailureStatus(resp, text) {
+  if (resp.status === 401 || resp.status === 403) return "auth";
+  if (resp.status === 408 || resp.status === 504 || /timed out/i.test(text)) return "timeout";
+  if (resp.status >= 500) return `server ${resp.status}`;
+  if (resp.status >= 400 && text) return "unavailable";
+  return `resolve ${resp.status}`;
 }
 
 async function resolveStreamUrl(sourceUrl) {
@@ -516,7 +499,8 @@ async function resolveStreamUrl(sourceUrl) {
     const resp = await fetch(withToken(url.toString()), { cache: "no-store" });
     if (!resp.ok) {
       const text = (await resp.text()).trim();
-      setPlayerStatus("error");
+      console.warn("Stream resolve failed", resp.status, text);
+      setPlayerStatus(resolveFailureStatus(resp, text));
       return "";
     }
     const body = await resp.json();
@@ -545,7 +529,6 @@ async function resolveStreamUrl(sourceUrl) {
 function cleanupFailedAudio() {
   if (playStartTimeout) clearTimeout(playStartTimeout);
   playStartTimeout = null;
-  stopStreamFallback();
   try {
     audio.pause();
     audio.removeAttribute("src");
@@ -724,7 +707,6 @@ function stopRemote() {
   audio.load();
   remoteNow = null;
   stopAcquisitionStatus();
-  stopStreamFallback();
   setPlayerStatus("");
   renderMiniPlayer();
   renderPlayer();
@@ -774,7 +756,6 @@ audio.addEventListener("playing", () => {
   if (playStartTimeout) clearTimeout(playStartTimeout);
   playStartTimeout = null;
   stopAcquisitionStatus();
-  stopStreamFallback();
   lastProgressAt = Date.now();
   setPlayerStatus("");
   renderMiniPlayer();
@@ -785,7 +766,6 @@ audio.addEventListener("timeupdate", () => {
   updateProgress();
   if (isActivelyPlaying()) {
     stopAcquisitionStatus();
-    stopStreamFallback();
     setPlayerStatus("");
   }
 });
@@ -803,22 +783,7 @@ audio.addEventListener("stalled", () => {
   if (!isActivelyPlaying() && !recentlyProgressed && !acquisitionTimer) setPlayerStatus("reconnect");
 });
 audio.addEventListener("error", () => {
-  if (!triedProxyFallback && activeSourceUrl) {
-    triedProxyFallback = true;
-    setPlayerStatus("retrying");
-    const proxyUrl = new URL("api/v1/stream", apiBaseHref());
-    proxyUrl.searchParams.set("url", activeSourceUrl);
-    proxyUrl.searchParams.set("proxy", "true");
-    audio.src = withToken(proxyUrl.toString());
-    audio.load();
-    audio.play().catch(() => {
-      cleanupFailedAudio();
-      setPlayerStatus("tap");
-    });
-    return;
-  }
   stopAcquisitionStatus();
-  stopStreamFallback();
   const code = audio.error?.code;
   const label = code === 2 ? "network" : code === 3 ? "decode" : code === 4 ? "unsupported" : "error";
   setPlayerStatus(label);

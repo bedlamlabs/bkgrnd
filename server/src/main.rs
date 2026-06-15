@@ -17,8 +17,12 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tokio::sync::Mutex;
+use tokio::time::timeout;
 use tracing::{error, info};
 use tower_http::services::ServeDir;
+
+const YTDLP_RESOLVE_TIMEOUT: Duration = Duration::from_secs(60);
+const YTDLP_SEARCH_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Clone)]
 struct AppState {
@@ -916,11 +920,23 @@ async fn resolve_direct_url(url: &str) -> Result<String, StreamResolveError> {
 
     cmd.arg(url);
 
-    let out = cmd.output().await.map_err(|e| StreamResolveError {
-        user_message: "Could not start YouTube stream resolver.".to_string(),
-        technical_message: e.to_string(),
-        terminal: false,
-    })?;
+    let out = match timeout(YTDLP_RESOLVE_TIMEOUT, cmd.output()).await {
+        Ok(Ok(out)) => out,
+        Ok(Err(e)) => {
+            return Err(StreamResolveError {
+                user_message: "Could not start YouTube stream resolver.".to_string(),
+                technical_message: e.to_string(),
+                terminal: false,
+            });
+        }
+        Err(_) => {
+            return Err(StreamResolveError {
+                user_message: "YouTube stream resolver timed out.".to_string(),
+                technical_message: format!("yt-dlp exceeded {}s", YTDLP_RESOLVE_TIMEOUT.as_secs()),
+                terminal: false,
+            });
+        }
+    };
     if !out.status.success() {
         let stderr = String::from_utf8_lossy(&out.stderr);
         return Err(classify_ytdlp_error(&stderr));
@@ -1101,13 +1117,12 @@ async fn search(State(state): State<AppState>, headers: HeaderMap, Query(q): Que
         return (StatusCode::BAD_REQUEST, "Missing q").into_response();
     }
 
-    let output = match ytdlp_command()
-        .args(["--flat-playlist", "--dump-json", &format!("ytsearch10:{} music", query)])
-        .output()
-        .await
-    {
-        Ok(o) => o,
-        Err(_) => return StatusCode::BAD_GATEWAY.into_response(),
+    let mut cmd = ytdlp_command();
+    cmd.args(["--flat-playlist", "--dump-json", &format!("ytsearch10:{} music", query)]);
+    let output = match timeout(YTDLP_SEARCH_TIMEOUT, cmd.output()).await {
+        Ok(Ok(o)) => o,
+        Ok(Err(_)) => return StatusCode::BAD_GATEWAY.into_response(),
+        Err(_) => return (StatusCode::GATEWAY_TIMEOUT, "Search timed out.").into_response(),
     };
 
     if !output.status.success() {

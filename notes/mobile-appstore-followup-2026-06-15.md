@@ -8,6 +8,7 @@ Date: 2026-06-15
 - Deployment host: `hpx@hpx.lan`
 - Runtime: Docker Compose under `/etc/dokploy/compose/wopr-apps/code`
 - Live container: `bkgrnd-hpx`
+- HPX is the permanent/future host; WOPR is legacy and discontinued for this app.
 - Public app is serving cache-busted `v=17` web assets.
 - HPX container includes Deno and sets `WOPR_YTDLP_JS_RUNTIMES=deno:/usr/local/bin/deno`.
 
