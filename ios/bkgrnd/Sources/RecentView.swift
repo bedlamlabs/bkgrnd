@@ -1,11 +1,9 @@
 import SwiftUI
 
-struct RecentMixesView: View {
+struct RecentView: View {
   @EnvironmentObject var appModel: AppModel
   @State private var showSettings = false
-  @State private var selectedFilter: String = "Recent"
 
-  private let filters = ["Recent", "Live", "Mixes"]
   private let columns = [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)]
 
   var body: some View {
@@ -15,36 +13,13 @@ struct RecentMixesView: View {
 
         ScrollView {
           VStack(alignment: .leading, spacing: 12) {
-            Text("RECENT MIXES")
+            Text("RECENT")
               .font(.caption.weight(.semibold))
               .foregroundStyle(.white.opacity(0.35))
               .padding(.horizontal, 16)
 
-            ScrollView(.horizontal, showsIndicators: false) {
-              HStack(spacing: 8) {
-                ForEach(filters, id: \.self) { f in
-                  Button {
-                    selectedFilter = f
-                  } label: {
-                    Text(f)
-                      .font(.subheadline)
-                      .foregroundStyle(.white.opacity(selectedFilter == f ? 0.9 : 0.7))
-                      .padding(.horizontal, 12)
-                      .padding(.vertical, 6)
-                      .background(.white.opacity(0.06))
-                      .overlay(
-                        RoundedRectangle(cornerRadius: 18)
-                          .stroke(.white.opacity(0.12), lineWidth: 1)
-                      )
-                      .clipShape(RoundedRectangle(cornerRadius: 18))
-                  }
-                }
-              }
-              .padding(.horizontal, 16)
-            }
-
             LazyVGrid(columns: columns, spacing: 12) {
-              ForEach((appModel.recentMixes?.items ?? []), id: \.id) { item in
+              ForEach((appModel.recentPlaylist?.items ?? []), id: \.id) { item in
                 MixTile(item: item)
                   .onTapGesture {
                     Task { await appModel.play(item) }
@@ -64,7 +39,7 @@ struct RecentMixesView: View {
           .padding(.vertical, 12)
         }
       }
-      .navigationTitle("Recent Mixes")
+      .navigationTitle("Recent")
       .toolbar {
         ToolbarItem(placement: .topBarTrailing) {
           Button {
@@ -124,4 +99,3 @@ private struct MixTile: View {
     .clipShape(RoundedRectangle(cornerRadius: 18))
   }
 }
-

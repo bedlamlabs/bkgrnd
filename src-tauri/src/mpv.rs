@@ -5,7 +5,13 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 use tokio::process::{Child, Command};
 
-const IPC_PATH: &str = "/tmp/bkgrnd-mpv-ipc";
+fn ipc_path() -> String {
+    let suffix = std::env::var("USER")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| std::process::id().to_string());
+    format!("/tmp/bkgrnd-mpv-ipc-{}", suffix)
+}
 
 pub struct MpvSession {
     pub child: Child,
@@ -25,8 +31,10 @@ pub async fn spawn_mpv(
     _title: &str,
     _url: &str,
 ) -> Result<MpvSession, String> {
+    let ipc_path = ipc_path();
+
     // Clean up stale IPC socket
-    let _ = std::fs::remove_file(IPC_PATH);
+    let _ = std::fs::remove_file(&ipc_path);
 
     let mpv_bundle_dir = mpv_dir(app)?;
     let mpv_bin = mpv_bundle_dir.join("mpv");
@@ -35,13 +43,16 @@ pub async fn spawn_mpv(
         return Err(format!("mpv binary not found at {:?}", mpv_bin));
     }
 
-    eprintln!("[mpv] Spawning: {:?} with DYLD_LIBRARY_PATH={:?}", mpv_bin, mpv_bundle_dir);
+    eprintln!(
+        "[mpv] Spawning: {:?} with DYLD_LIBRARY_PATH={:?}",
+        mpv_bin, mpv_bundle_dir
+    );
 
     let mut child = Command::new(&mpv_bin)
         .env("DYLD_LIBRARY_PATH", &mpv_bundle_dir)
         .args([
             "--no-video",
-            &format!("--input-ipc-server={}", IPC_PATH),
+            &format!("--input-ipc-server={}", ipc_path),
             "--really-quiet",
             "--terminal=no",
             stream_url,
@@ -52,7 +63,7 @@ pub async fn spawn_mpv(
         .map_err(|e| format!("Failed to spawn mpv: {}", e))?;
 
     // Wait for IPC socket to become available (up to 5s)
-    if let Err(e) = wait_for_ipc(IPC_PATH, 5000).await {
+    if let Err(e) = wait_for_ipc(&ipc_path, 5000).await {
         // Check if mpv already exited
         if let Ok(Some(status)) = child.try_wait() {
             // Read stderr for diagnostics
@@ -65,7 +76,11 @@ pub async fn spawn_mpv(
                     eprintln!("[mpv] stderr: {}", buf.trim());
                 }
             }
-            return Err(format!("mpv exited immediately with code {:?}: {}", status.code(), e));
+            return Err(format!(
+                "mpv exited immediately with code {:?}: {}",
+                status.code(),
+                e
+            ));
         }
         return Err(e);
     }
@@ -87,7 +102,7 @@ async fn wait_for_ipc(path: &str, timeout_ms: u64) -> Result<(), String> {
 }
 
 pub async fn mpv_command(command: &[serde_json::Value]) -> Result<serde_json::Value, String> {
-    let stream = UnixStream::connect(IPC_PATH)
+    let stream = UnixStream::connect(ipc_path())
         .await
         .map_err(|e| format!("mpv IPC connect failed: {}", e))?;
 
@@ -145,7 +160,12 @@ pub async fn stop_mpv(session: &mut MpvSession) {
     // Fallback: kill process
     let _ = session.child.start_kill();
     let _ = session.child.wait().await;
-    let _ = std::fs::remove_file(IPC_PATH);
+    let _ = std::fs::remove_file(ipc_path());
+}
+
+pub async fn stop_stale_mpv() {
+    let _ = mpv_command(&[serde_json::json!("quit")]).await;
+    let _ = std::fs::remove_file(ipc_path());
 }
 
 pub async fn get_paused() -> bool {
@@ -170,6 +190,21 @@ pub async fn get_volume() -> f64 {
         Ok(val) => val.as_f64().unwrap_or(100.0),
         Err(_) => 100.0,
     }
+}
+
+async fn get_number_property(name: &str) -> Option<f64> {
+    match mpv_command(&[serde_json::json!("get_property"), serde_json::json!(name)]).await {
+        Ok(val) => val.as_f64().filter(|value| value.is_finite()),
+        Err(_) => None,
+    }
+}
+
+pub async fn get_time_position() -> Option<f64> {
+    get_number_property("time-pos").await
+}
+
+pub async fn get_duration() -> Option<f64> {
+    get_number_property("duration").await
 }
 
 pub async fn set_volume(vol: f64) -> Result<(), String> {

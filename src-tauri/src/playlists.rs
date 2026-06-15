@@ -3,6 +3,9 @@ use std::path::PathBuf;
 
 use crate::history;
 
+const DEFAULT_PLAYLIST_ID: &str = "streams";
+const DEFAULT_PLAYLIST_NAME: &str = "Streams";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlaylistDoc {
@@ -28,6 +31,8 @@ pub struct PlaylistItem {
     pub channel: String,
     #[serde(default)]
     pub thumbnail: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration: Option<f64>,
     #[serde(default)]
     pub added_at: String,
 }
@@ -73,6 +78,56 @@ pub fn empty_doc() -> PlaylistDoc {
     }
 }
 
+pub fn load_or_derive_playlists() -> PlaylistDoc {
+    let mut doc = load_playlists();
+    if doc.playlists.is_empty() {
+        doc = doc_from_history();
+    } else {
+        normalize_playlist_names(&mut doc);
+    }
+    doc
+}
+
+pub fn save_item(mut item: PlaylistItem) -> PlaylistDoc {
+    let mut doc = load_or_derive_playlists();
+    if doc.playlists.is_empty() {
+        doc.playlists.push(Playlist {
+            id: DEFAULT_PLAYLIST_ID.to_string(),
+            name: DEFAULT_PLAYLIST_NAME.to_string(),
+            items: Vec::new(),
+        });
+    }
+    normalize_playlist_names(&mut doc);
+
+    if item.added_at.trim().is_empty() {
+        item.added_at = chrono_now();
+    }
+
+    let playlist_index = doc
+        .playlists
+        .iter()
+        .position(|playlist| playlist.id == DEFAULT_PLAYLIST_ID)
+        .unwrap_or(0);
+    let playlist = &mut doc.playlists[playlist_index];
+
+    playlist.items.retain(|existing| existing.url != item.url);
+    playlist.items.insert(0, item);
+    playlist.items.truncate(50);
+    doc.updated_at = chrono_now();
+    save_playlists(&doc);
+    doc
+}
+
+pub fn remove_item(url: &str) -> PlaylistDoc {
+    let mut doc = load_or_derive_playlists();
+    for playlist in &mut doc.playlists {
+        playlist.items.retain(|item| item.url != url);
+    }
+    doc.updated_at = chrono_now();
+    save_playlists(&doc);
+    doc
+}
+
 pub fn doc_from_history() -> PlaylistDoc {
     let history_items = history::load_history();
     let items: Vec<PlaylistItem> = history_items
@@ -82,6 +137,7 @@ pub fn doc_from_history() -> PlaylistDoc {
             title: h.title,
             channel: String::new(),
             thumbnail: h.thumbnail,
+            duration: h.duration,
             added_at: h.played_at,
         })
         .collect();
@@ -90,10 +146,30 @@ pub fn doc_from_history() -> PlaylistDoc {
         version: 1,
         updated_at: chrono_now(),
         playlists: vec![Playlist {
-            id: "recent-mixes".to_string(),
-            name: "Recent Mixes".to_string(),
+            id: DEFAULT_PLAYLIST_ID.to_string(),
+            name: DEFAULT_PLAYLIST_NAME.to_string(),
             items,
         }],
+    }
+}
+
+fn normalize_playlist_names(doc: &mut PlaylistDoc) {
+    let legacy_id = format!("{}-{}", "recent", "mixes");
+    let legacy_name = format!("{} {}", "Recent", "Mixes");
+    for playlist in &mut doc.playlists {
+        if playlist.id == legacy_id {
+            playlist.id = DEFAULT_PLAYLIST_ID.to_string();
+        }
+
+        if playlist.name == legacy_name {
+            playlist.name = DEFAULT_PLAYLIST_NAME.to_string();
+        }
+
+        for item in &mut playlist.items {
+            if item.channel == legacy_name {
+                item.channel.clear();
+            }
+        }
     }
 }
 
@@ -145,4 +221,3 @@ fn chrono_now() -> String {
 fn is_leap(y: i64) -> bool {
     (y % 4 == 0 && y % 100 != 0) || (y % 400 == 0)
 }
-

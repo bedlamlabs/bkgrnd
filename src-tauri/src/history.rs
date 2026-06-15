@@ -11,6 +11,8 @@ pub struct HistoryEntry {
     pub entry_type: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub track_count: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration: Option<f64>,
     pub played_at: String,
 }
 
@@ -53,6 +55,7 @@ pub fn add_to_history(
     thumbnail: &str,
     entry_type: &str,
     track_count: Option<usize>,
+    duration: Option<f64>,
 ) {
     ensure_dir();
     let mut history = load_history();
@@ -67,12 +70,24 @@ pub fn add_to_history(
         thumbnail: thumbnail.to_string(),
         entry_type: entry_type.to_string(),
         track_count,
+        duration,
         played_at: chrono_now(),
     };
     history.insert(0, entry);
 
     // Cap at MAX_ENTRIES
     history.truncate(MAX_ENTRIES);
+
+    let path = history_path();
+    if let Ok(json) = serde_json::to_string_pretty(&history) {
+        let _ = std::fs::write(&path, json);
+    }
+}
+
+pub fn remove_from_history(url: &str) {
+    ensure_dir();
+    let mut history = load_history();
+    history.retain(|h| h.url != url);
 
     let path = history_path();
     if let Ok(json) = serde_json::to_string_pretty(&history) {

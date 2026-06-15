@@ -1,17 +1,17 @@
 [Unit]
-Description=bkgrnd WOPR backend
+Description=bkgrnd server
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=/opt/bkgrnd/wopr-server
-ExecStart=/opt/bkgrnd/wopr-server/target/release/wopr_server
+WorkingDirectory=/opt/bkgrnd/server
+ExecStart=/opt/bkgrnd/server/target/release/bkgrnd_server
 Restart=always
 RestartSec=2
 
 # Data + auth
-Environment=WOPR_BIND=0.0.0.0:808
+Environment=WOPR_BIND=127.0.0.1:18081
 Environment=WOPR_DATA_DIR=/var/lib/bkgrnd
 # Environment=WOPR_BEARER_TOKEN=change-me
 
@@ -21,4 +21,3 @@ Group=bkgrnd
 
 [Install]
 WantedBy=multi-user.target
-

@@ -5,6 +5,7 @@ use tokio::sync::Mutex;
 
 use crate::history;
 use crate::mpv::{self, MpvSession};
+use crate::spotify;
 use crate::ytdlp::{self, PlaylistItem};
 
 #[derive(Debug, Clone, Serialize)]
@@ -20,6 +21,9 @@ pub struct PlayerStatus {
     pub queue_position: usize,
     pub queue_length: usize,
     pub playlist_title: String,
+    pub channel: String,
+    pub duration: Option<f64>,
+    pub position: Option<f64>,
 }
 
 impl PlayerStatus {
@@ -35,6 +39,9 @@ impl PlayerStatus {
             queue_position: 0,
             queue_length: 0,
             playlist_title: String::new(),
+            channel: String::new(),
+            duration: None,
+            position: None,
         }
     }
 }
@@ -64,7 +71,28 @@ pub type SharedState = Arc<Mutex<PlayerState>>;
 pub async fn play(url: &str, app: AppHandle, state: SharedState) -> Result<PlayerStatus, String> {
     stop(state.clone()).await?;
 
-    if ytdlp::is_playlist_url(url) {
+    if spotify::is_spotify_url(url) {
+        let result = spotify::enumerate(&app, url).await?;
+
+        let title = result.title.clone();
+        history::add_to_history(
+            url,
+            &title,
+            &result.thumbnail,
+            "spotify-playlist",
+            Some(result.items.len().min(result.source_count)),
+            None,
+        );
+
+        {
+            let mut s = state.lock().await;
+            s.queue = result.items;
+            s.playlist_title = title;
+        }
+
+        play_queue_item(0, app, state.clone()).await?;
+        get_status(state).await
+    } else if ytdlp::is_playlist_url(url) {
         let result = ytdlp::enumerate_playlist(&app, url).await?;
 
         if result.items.is_empty() {
@@ -90,6 +118,7 @@ pub async fn play(url: &str, app: AppHandle, state: SharedState) -> Result<Playe
             &result.items[0].thumbnail,
             "playlist",
             Some(result.items.len()),
+            None,
         );
 
         {
@@ -101,7 +130,7 @@ pub async fn play(url: &str, app: AppHandle, state: SharedState) -> Result<Playe
         play_queue_item(start_index, app, state.clone()).await?;
         get_status(state).await
     } else {
-        let info = ytdlp::get_video_info(&app, url).await;
+        let info = ytdlp::resolve_stream_info(&app, url).await?;
         let video_id = if info.video_id.is_empty() {
             ytdlp::extract_video_id(url)
         } else {
@@ -115,6 +144,8 @@ pub async fn play(url: &str, app: AppHandle, state: SharedState) -> Result<Playe
                 video_id: video_id.clone(),
                 title: info.title.clone(),
                 thumbnail: ytdlp::thumbnail_url(&video_id),
+                channel: info.channel.clone(),
+                duration: info.duration,
             }];
             s.queue_index = 0;
             s.playlist_title = String::new();
@@ -126,9 +157,15 @@ pub async fn play(url: &str, app: AppHandle, state: SharedState) -> Result<Playe
             &ytdlp::thumbnail_url(&video_id),
             if info.is_live { "stream" } else { "video" },
             None,
+            info.duration,
         );
 
-        play_queue_item(0, app, state.clone()).await?;
+        let session = mpv::spawn_mpv(&app, &info.stream_url, &info.title, url).await?;
+        {
+            let mut s = state.lock().await;
+            s.session = Some(session);
+            s.current_title = info.title;
+        }
         get_status(state).await
     }
 }
@@ -139,67 +176,67 @@ fn play_queue_item(
     state: SharedState,
 ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send>> {
     Box::pin(async move {
-    let (item_url, item_title) = {
-        let mut s = state.lock().await;
-        if index >= s.queue.len() {
-            return Err("Queue index out of bounds".to_string());
-        }
-
-        if let Some(ref mut session) = s.session {
-            mpv::stop_mpv(session).await;
-        }
-        s.session = None;
-        s.queue_index = index as i32;
-
-        let item = &s.queue[index];
-        (item.url.clone(), item.title.clone())
-    };
-
-    let stream_url = ytdlp::extract_stream_url(&app, &item_url).await?;
-    let session = mpv::spawn_mpv(&app, &stream_url, &item_title, &item_url).await?;
-
-    {
-        let mut s = state.lock().await;
-        s.session = Some(session);
-        s.current_title = item_title;
-    }
-
-    // Spawn auto-advance watcher
-    let state_clone = state.clone();
-    let app_clone = app.clone();
-    tokio::spawn(async move {
-        loop {
-            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-
-            let should_advance = {
-                let mut s = state_clone.lock().await;
-                if let Some(ref mut session) = s.session {
-                    match session.child.try_wait() {
-                        Ok(Some(status)) => {
-                            let code = status.code().unwrap_or(-1);
-                            s.session = None;
-                            if code == 0 && (s.queue_index as usize) < s.queue.len() - 1 {
-                                Some((s.queue_index + 1) as usize)
-                            } else {
-                                None
-                            }
-                        }
-                        Ok(None) => continue,
-                        Err(_) => return,
-                    }
-                } else {
-                    return;
-                }
-            };
-
-            if let Some(next_index) = should_advance {
-                let _ = play_queue_item(next_index, app_clone, state_clone).await;
+        let (item_url, item_title) = {
+            let mut s = state.lock().await;
+            if index >= s.queue.len() {
+                return Err("Queue index out of bounds".to_string());
             }
-            return;
-        }
-    });
 
-    Ok(())
+            if let Some(ref mut session) = s.session {
+                mpv::stop_mpv(session).await;
+            }
+            s.session = None;
+            s.queue_index = index as i32;
+
+            let item = &s.queue[index];
+            (item.url.clone(), item.title.clone())
+        };
+
+        let stream_url = ytdlp::extract_stream_url(&app, &item_url).await?;
+        let session = mpv::spawn_mpv(&app, &stream_url, &item_title, &item_url).await?;
+
+        {
+            let mut s = state.lock().await;
+            s.session = Some(session);
+            s.current_title = item_title;
+        }
+
+        // Spawn auto-advance watcher
+        let state_clone = state.clone();
+        let app_clone = app.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+                let should_advance = {
+                    let mut s = state_clone.lock().await;
+                    if let Some(ref mut session) = s.session {
+                        match session.child.try_wait() {
+                            Ok(Some(status)) => {
+                                let code = status.code().unwrap_or(-1);
+                                s.session = None;
+                                if code == 0 && (s.queue_index as usize) < s.queue.len() - 1 {
+                                    Some((s.queue_index + 1) as usize)
+                                } else {
+                                    None
+                                }
+                            }
+                            Ok(None) => continue,
+                            Err(_) => return,
+                        }
+                    } else {
+                        return;
+                    }
+                };
+
+                if let Some(next_index) = should_advance {
+                    let _ = play_queue_item(next_index, app_clone, state_clone).await;
+                }
+                return;
+            }
+        });
+
+        Ok(())
     }) // end Box::pin
 }
 
@@ -304,9 +341,13 @@ pub async fn get_status(state: SharedState) -> Result<PlayerStatus, String> {
         return Ok(PlayerStatus::empty());
     }
 
-    let is_paused = {
+    let (is_paused, position, mpv_duration) = {
         drop(s);
-        mpv::get_paused().await
+        (
+            mpv::get_paused().await,
+            mpv::get_time_position().await,
+            mpv::get_duration().await,
+        )
     };
 
     let s = state.lock().await;
@@ -325,7 +366,9 @@ pub async fn get_status(state: SharedState) -> Result<PlayerStatus, String> {
         is_paused,
         title: s.current_title.clone(),
         mode: Some("ytdlp".to_string()),
-        thumbnail: current_item.map(|i| i.thumbnail.clone()).unwrap_or_default(),
+        thumbnail: current_item
+            .map(|i| i.thumbnail.clone())
+            .unwrap_or_default(),
         video_id: current_item.map(|i| i.video_id.clone()).unwrap_or_default(),
         source_url: current_item.map(|i| i.url.clone()).unwrap_or_default(),
         queue_position: if s.queue_index >= 0 {
@@ -335,5 +378,10 @@ pub async fn get_status(state: SharedState) -> Result<PlayerStatus, String> {
         },
         queue_length: s.queue.len(),
         playlist_title: s.playlist_title.clone(),
+        channel: current_item.map(|i| i.channel.clone()).unwrap_or_default(),
+        duration: current_item
+            .and_then(|i| i.duration)
+            .or(mpv_duration.filter(|duration| *duration > 0.0)),
+        position,
     })
 }

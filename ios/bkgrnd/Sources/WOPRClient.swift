@@ -47,6 +47,31 @@ actor WOPRClient {
     var channel: String
   }
 
+  struct LocalStatusResponse: Decodable {
+    var online: Bool
+    var receivedAgoMs: UInt64?
+    var status: LocalPlayerStatus?
+  }
+
+  struct LocalPlayerStatus: Decodable {
+    var isPlaying: Bool
+    var isPaused: Bool
+    var title: String
+    var thumbnail: String
+    var sourceUrl: String
+    var playlistTitle: String
+    var duration: Double?
+    var position: Double?
+  }
+
+  struct LocalCommandRequest: Encodable {
+    var action: String
+    var url: String = ""
+    var title: String = ""
+    var thumbnail: String = ""
+    var sourceUrl: String = ""
+  }
+
   func search(query: String) async throws -> [SearchResult] {
     var comps = URLComponents(url: config.baseURL.appendingPathComponent("/api/v1/search"), resolvingAgainstBaseURL: false)!
     comps.queryItems = [URLQueryItem(name: "q", value: query)]
@@ -58,6 +83,29 @@ actor WOPRClient {
       throw URLError(.badServerResponse)
     }
     return try JSONDecoder().decode([SearchResult].self, from: data)
+  }
+
+  func fetchLocalStatus() async throws -> LocalStatusResponse {
+    var req = URLRequest(url: config.baseURL.appendingPathComponent("/api/v1/local/status"))
+    req.httpMethod = "GET"
+    addAuth(&req)
+    let (data, resp) = try await URLSession.shared.data(for: req)
+    guard (resp as? HTTPURLResponse)?.statusCode == 200 else {
+      throw URLError(.badServerResponse)
+    }
+    return try JSONDecoder().decode(LocalStatusResponse.self, from: data)
+  }
+
+  func sendLocalCommand(_ command: LocalCommandRequest) async throws {
+    var req = URLRequest(url: config.baseURL.appendingPathComponent("/api/v1/local/commands"))
+    req.httpMethod = "POST"
+    req.setValue("application/json", forHTTPHeaderField: "content-type")
+    addAuth(&req)
+    req.httpBody = try JSONEncoder().encode(command)
+    let (_, resp) = try await URLSession.shared.data(for: req)
+    guard let status = (resp as? HTTPURLResponse)?.statusCode, (200..<300).contains(status) else {
+      throw URLError(.badServerResponse)
+    }
   }
 
   private func addAuth(_ req: inout URLRequest) {

@@ -1,4 +1,4 @@
-# WOPR Server (bkgrnd)
+# bkgrnd Server
 
 Minimal backend for:
 - Playlist sync (`playlists.yaml`)
@@ -6,11 +6,11 @@ Minimal backend for:
 
 ## Run
 
-Requirements on WOPR:
+Requirements:
 - `yt-dlp` available in `PATH`
 
 Environment:
-- `WOPR_BIND` (default `0.0.0.0:808`)
+- `WOPR_BIND` (default `127.0.0.1:18081`)
 - `WOPR_DATA_DIR` (default `./data`)
 - `WOPR_BEARER_TOKEN` (optional; if set, clients must send `Authorization: Bearer <token>`)
 
@@ -19,14 +19,14 @@ Commands:
 
 ## systemd (optional)
 
-This repo includes a template unit file: `wopr-server/bkgrnd-wopr.service`.
+This repo includes a template unit file: `server/bkgrnd-server.service`.
 
-Suggested setup on WOPR:
+Suggested setup:
 - Create a user: `sudo useradd --system --home /var/lib/bkgrnd --shell /usr/sbin/nologin bkgrnd`
-- Put code at: `/opt/bkgrnd` (so binary ends up at `/opt/bkgrnd/wopr-server/target/release/wopr_server`)
+- Put code at: `/opt/bkgrnd` (so binary ends up at `/opt/bkgrnd/server/target/release/bkgrnd_server`)
 - Create data dir: `sudo mkdir -p /var/lib/bkgrnd && sudo chown bkgrnd:bkgrnd /var/lib/bkgrnd`
-- Install unit: `sudo cp /opt/bkgrnd/wopr-server/bkgrnd-wopr.service /etc/systemd/system/bkgrnd-wopr.service`
-- `sudo systemctl daemon-reload && sudo systemctl enable --now bkgrnd-wopr`
+- Install unit: `sudo cp /opt/bkgrnd/server/bkgrnd-server.service /etc/systemd/system/bkgrnd-server.service`
+- `sudo systemctl daemon-reload && sudo systemctl enable --now bkgrnd-server`
 
 ## API
 

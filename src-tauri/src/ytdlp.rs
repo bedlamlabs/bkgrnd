@@ -26,7 +26,12 @@ pub fn extract_video_id(url_str: &str) -> String {
         }
 
         if host == "youtu.be" {
-            let id = parsed.path().trim_start_matches('/').split('/').next().unwrap_or("");
+            let id = parsed
+                .path()
+                .trim_start_matches('/')
+                .split('/')
+                .next()
+                .unwrap_or("");
             if id.len() == 11 {
                 return id.to_string();
             }
@@ -59,36 +64,182 @@ pub fn is_playlist_url(url_str: &str) -> bool {
 }
 
 pub async fn extract_stream_url(app: &AppHandle, url: &str) -> Result<String, String> {
-    let formats = ["bestaudio", "best"];
-    for fmt in formats {
-        eprintln!("[ytdlp] Trying format {} for {}", fmt, url);
-        let output = app
-            .shell()
-            .sidecar("yt-dlp")
-            .map_err(|e| {
-                eprintln!("[ytdlp] Sidecar creation failed: {}", e);
-                format!("Failed to create yt-dlp sidecar: {}", e)
-            })?
-            .args(["-f", fmt, "--get-url", "--no-playlist", url])
-            .output()
-            .await
-            .map_err(|e| {
-                eprintln!("[ytdlp] Spawn failed: {}", e);
-                format!("yt-dlp spawn failed: {}", e)
-            })?;
-
-        if output.status.success() {
-            let result = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !result.is_empty() {
-                eprintln!("[ytdlp] Got stream URL ({} chars)", result.len());
-                return Ok(result);
-            }
-        } else {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            eprintln!("[ytdlp] Format {} failed: {}", fmt, stderr.trim());
-        }
+    let format = "bestaudio[ext=m4a]/bestaudio[acodec^=mp4a]/bestaudio/best";
+    eprintln!("[ytdlp] Resolving stream for {}", url);
+    let mut args = vec!["-f", format, "--get-url", "--no-playlist"];
+    let js_runtimes = std::env::var("BKGRND_YTDLP_JS_RUNTIMES")
+        .ok()
+        .or_else(|| std::env::var("WOPR_YTDLP_JS_RUNTIMES").ok());
+    if let Some(value) = js_runtimes
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        args.push("--js-runtimes");
+        args.push(value.trim());
     }
-    Err("yt-dlp could not extract any stream URL".to_string())
+    args.push(url);
+
+    let output = ytdlp_sidecar(app, &args)?.output().await.map_err(|e| {
+        eprintln!("[ytdlp] Spawn failed: {}", e);
+        format!("yt-dlp spawn failed: {}", e)
+    })?;
+
+    if output.status.success() {
+        let result = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !result.is_empty() {
+            eprintln!("[ytdlp] Got stream URL ({} chars)", result.len());
+            return Ok(result);
+        }
+        return Err("YouTube did not return a playable stream URL.".to_string());
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    eprintln!("[ytdlp] Resolve failed: {}", stderr.trim());
+    Err(user_facing_ytdlp_error(&stderr))
+}
+
+#[derive(Debug)]
+pub struct StreamInfo {
+    pub stream_url: String,
+    pub title: String,
+    pub is_live: bool,
+    pub video_id: String,
+    pub channel: String,
+    pub duration: Option<f64>,
+}
+
+pub async fn resolve_stream_info(app: &AppHandle, url: &str) -> Result<StreamInfo, String> {
+    let format = "bestaudio[ext=m4a]/bestaudio[acodec^=mp4a]/bestaudio/best";
+    let mut args = vec![
+        "-f",
+        format,
+        "--no-playlist",
+        "--print",
+        "%(title)s",
+        "--print",
+        "%(is_live)s",
+        "--print",
+        "%(id)s",
+        "--print",
+        "%(channel,uploader)s",
+        "--print",
+        "%(duration)s",
+        "--get-url",
+    ];
+    let js_runtimes = std::env::var("BKGRND_YTDLP_JS_RUNTIMES")
+        .ok()
+        .or_else(|| std::env::var("WOPR_YTDLP_JS_RUNTIMES").ok());
+    if let Some(value) = js_runtimes
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        args.push("--js-runtimes");
+        args.push(value.trim());
+    }
+    args.push(url);
+
+    eprintln!("[ytdlp] Resolving metadata + stream for {}", url);
+    let output = ytdlp_sidecar(app, &args)?.output().await.map_err(|e| {
+        eprintln!("[ytdlp] Spawn failed: {}", e);
+        format!("yt-dlp spawn failed: {}", e)
+    })?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        eprintln!("[ytdlp] Resolve failed: {}", stderr.trim());
+        return Err(user_facing_ytdlp_error(&stderr));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut lines = stdout.lines().filter(|line| !line.trim().is_empty());
+    let title = lines.next().unwrap_or("Unknown").trim().to_string();
+    let is_live = lines
+        .next()
+        .map(|value| value.trim().eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    let video_id = lines
+        .next()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| extract_video_id(url));
+    let channel = lines
+        .next()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty() && !value.eq_ignore_ascii_case("none"))
+        .unwrap_or_default();
+    let duration = lines.next().and_then(parse_duration);
+    let stream_url = lines
+        .find(|line| line.starts_with("http://") || line.starts_with("https://"))
+        .map(str::trim)
+        .unwrap_or("")
+        .to_string();
+
+    if stream_url.is_empty() {
+        return Err("YouTube did not return a playable stream URL.".to_string());
+    }
+
+    Ok(StreamInfo {
+        stream_url,
+        title,
+        is_live,
+        video_id,
+        channel,
+        duration,
+    })
+}
+
+fn parse_duration(value: &str) -> Option<f64> {
+    let trimmed = value.trim();
+    if trimmed.is_empty()
+        || trimmed.eq_ignore_ascii_case("none")
+        || trimmed.eq_ignore_ascii_case("na")
+        || trimmed.eq_ignore_ascii_case("n/a")
+    {
+        return None;
+    }
+    trimmed
+        .parse::<f64>()
+        .ok()
+        .filter(|duration| *duration > 0.0)
+}
+
+fn ytdlp_sidecar(
+    app: &AppHandle,
+    args: &[&str],
+) -> Result<tauri_plugin_shell::process::Command, String> {
+    app.shell()
+        .sidecar("yt-dlp")
+        .map_err(|e| {
+            eprintln!("[ytdlp] Sidecar creation failed: {}", e);
+            format!("Failed to create yt-dlp sidecar: {}", e)
+        })
+        .map(|cmd| cmd.args(args))
+}
+
+fn user_facing_ytdlp_error(stderr: &str) -> String {
+    let lower = stderr.to_lowercase();
+    if lower.contains("live stream recording is not available") {
+        return "This live stream recording is not available.".to_string();
+    }
+    if lower.contains("private video") {
+        return "This video is private and cannot be played.".to_string();
+    }
+    if lower.contains("video unavailable") || lower.contains("this video is unavailable") {
+        return "This video is unavailable on YouTube.".to_string();
+    }
+    if lower.contains("members-only") || lower.contains("join this channel") {
+        return "This video is members-only and cannot be played.".to_string();
+    }
+    if lower.contains("sign in to confirm your age") || lower.contains("age-restricted") {
+        return "This video is age-restricted and requires YouTube sign-in.".to_string();
+    }
+
+    stderr
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("ERROR:").map(str::trim))
+        .filter(|message| !message.is_empty())
+        .map(|message| message.to_string())
+        .unwrap_or_else(|| "YouTube did not return a playable stream.".to_string())
 }
 
 #[derive(Debug)]
@@ -136,6 +287,8 @@ pub struct PlaylistItem {
     pub video_id: String,
     pub title: String,
     pub thumbnail: String,
+    pub channel: String,
+    pub duration: Option<f64>,
 }
 
 pub struct PlaylistResult {
@@ -164,8 +317,7 @@ pub async fn search_music(app: &AppHandle, query: &str) -> Result<Vec<SearchResu
             .split_whitespace()
             .filter(|w| *w != "playlist")
             .collect();
-        let mut search_url =
-            url::Url::parse("https://www.youtube.com/results").unwrap();
+        let mut search_url = url::Url::parse("https://www.youtube.com/results").unwrap();
         search_url
             .query_pairs_mut()
             .append_pair("search_query", &clean.join(" "))
@@ -246,6 +398,48 @@ pub async fn search_music(app: &AppHandle, query: &str) -> Result<Vec<SearchResu
     Ok(results)
 }
 
+pub async fn search_first_music(
+    app: &AppHandle,
+    query: &str,
+) -> Result<Option<SearchResult>, String> {
+    let search_arg = format!("ytsearch1:{} music", query);
+
+    let output = app
+        .shell()
+        .sidecar("yt-dlp")
+        .map_err(|e| format!("Failed to create yt-dlp sidecar: {}", e))?
+        .args(["--flat-playlist", "--dump-json", &search_arg])
+        .output()
+        .await
+        .map_err(|e| format!("yt-dlp search failed: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("yt-dlp search failed: {}", stderr.trim()));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let Some(line) = stdout.lines().find(|l| !l.trim().is_empty()) else {
+        return Ok(None);
+    };
+
+    let entry = serde_json::from_str::<serde_json::Value>(line)
+        .map_err(|e| format!("yt-dlp search returned invalid JSON: {}", e))?;
+    let Some(id) = entry["id"].as_str() else {
+        return Ok(None);
+    };
+
+    Ok(Some(SearchResult {
+        title: entry["title"].as_str().unwrap_or("Unknown").to_string(),
+        url: format!("https://www.youtube.com/watch?v={}", id),
+        video_id: id.to_string(),
+        thumbnail: thumbnail_url(id),
+        duration: entry["duration"].as_f64(),
+        channel: entry["channel"].as_str().unwrap_or("").to_string(),
+        track_count: None,
+    }))
+}
+
 pub async fn enumerate_playlist(app: &AppHandle, url: &str) -> Result<PlaylistResult, String> {
     let output = app
         .shell()
@@ -283,6 +477,12 @@ pub async fn enumerate_playlist(app: &AppHandle, url: &str) -> Result<PlaylistRe
                 video_id: id.to_string(),
                 title: entry["title"].as_str().unwrap_or("Unknown").to_string(),
                 thumbnail: thumbnail_url(id),
+                channel: entry["channel"]
+                    .as_str()
+                    .or_else(|| entry["uploader"].as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                duration: entry["duration"].as_f64(),
             });
         }
     }

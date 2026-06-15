@@ -1,7 +1,7 @@
 # iOS App (bkgrnd)
 
 Source files for an iOS SwiftUI app that:
-- Shows **Recent Mixes** (grid)
+- Shows **Recent** (grid)
 - Shows **Now Playing**
 - Shows **Search**
 - Streams audio from WOPR and supports background playback
@@ -24,6 +24,5 @@ In the target settings:
 ## WOPR config
 
 Set these in the app’s Settings screen:
-- Base URL (default: `http://worp.thriveos.pro:8080`)
-  - Use `http://worp.thriveos.pro:808` if you expose WOPR on port 808 (recommended).
+- Base URL (default: `https://bkgrnd.bedl.am`)
 - Optional Bearer token (if configured server-side)

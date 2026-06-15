@@ -2,25 +2,29 @@ import AVFoundation
 import Combine
 import Foundation
 
+private let defaultBaseURLString = "https://bkgrnd.bedl.am"
+
 @MainActor
 final class AppModel: ObservableObject {
   @Published var playlists: PlaylistDoc?
-  @Published var recentMixes: Playlist?
+  @Published var recentPlaylist: Playlist?
   @Published var nowPlaying: PlaylistItem?
   @Published var isLoadingPlaylists = false
   @Published var lastSyncError: String?
 
   @Published var searchQuery = ""
   @Published var searchResults: [PlaylistItem] = []
+  @Published var remoteStatus: WOPRClient.LocalStatusResponse?
+  @Published var lastRemoteError: String?
 
-  @Published var baseURLString: String = UserDefaults.standard.string(forKey: "woprBaseURL") ?? "http://worp.thriveos.pro:808"
+  @Published var baseURLString: String = UserDefaults.standard.string(forKey: "woprBaseURL") ?? defaultBaseURLString
   @Published var bearerToken: String = UserDefaults.standard.string(forKey: "woprBearerToken") ?? ""
 
   let audioPlayer = AudioPlayer()
   private var client: WOPRClient
 
   init() {
-    let url = URL(string: UserDefaults.standard.string(forKey: "woprBaseURL") ?? "http://worp.thriveos.pro:808")!
+    let url = URL(string: UserDefaults.standard.string(forKey: "woprBaseURL") ?? defaultBaseURLString)!
     client = WOPRClient(config: .init(baseURL: url, bearerToken: UserDefaults.standard.string(forKey: "woprBearerToken")))
   }
 
@@ -35,6 +39,11 @@ final class AppModel: ObservableObject {
     }
   }
 
+  private func syncClientConfig() async {
+    guard let baseURL = URL(string: baseURLString) else { return }
+    await client.updateConfig(.init(baseURL: baseURL, bearerToken: bearerToken.isEmpty ? nil : bearerToken))
+  }
+
   func refreshPlaylists() async {
     lastSyncError = nil
     isLoadingPlaylists = true
@@ -42,21 +51,18 @@ final class AppModel: ObservableObject {
     do {
       let doc = try await client.fetchPlaylists()
       playlists = doc
-      recentMixes = doc.playlists.first(where: { $0.id == "recent-mixes" }) ?? doc.playlists.first
+      recentPlaylist = doc.playlists.first(where: { $0.id == "recent" || $0.id == "streams" || $0.id == "recent-mixes" }) ?? doc.playlists.first
     } catch {
       lastSyncError = error.localizedDescription
     }
   }
 
   func play(_ item: PlaylistItem) async {
-    guard let url = URL(string: item.url),
-          let baseURL = URL(string: baseURLString)
-    else { return }
+    guard let url = URL(string: item.url) else { return }
 
     nowPlaying = item
 
-    // Keep config in sync if base URL changed.
-    await client.updateConfig(.init(baseURL: baseURL, bearerToken: bearerToken.isEmpty ? nil : bearerToken))
+    await syncClientConfig()
 
     let stream = await client.streamURL(for: url)
     let headers = await client.streamHeaders()
@@ -65,12 +71,12 @@ final class AppModel: ObservableObject {
 
   func performSearch() async {
     let q = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !q.isEmpty, let baseURL = URL(string: baseURLString) else {
+    guard !q.isEmpty else {
       searchResults = []
       return
     }
 
-    await client.updateConfig(.init(baseURL: baseURL, bearerToken: bearerToken.isEmpty ? nil : bearerToken))
+    await syncClientConfig()
     do {
       let results = try await client.search(query: q)
       searchResults = results.map {
@@ -78,6 +84,50 @@ final class AppModel: ObservableObject {
       }
     } catch {
       // Fail quietly; keep last results.
+    }
+  }
+
+  func refreshRemoteStatus() async {
+    lastRemoteError = nil
+    await syncClientConfig()
+    do {
+      remoteStatus = try await client.fetchLocalStatus()
+    } catch {
+      lastRemoteError = error.localizedDescription
+    }
+  }
+
+  func playRemote(_ item: PlaylistItem) async {
+    await syncClientConfig()
+    do {
+      try await client.sendLocalCommand(.init(
+        action: "play",
+        url: item.url,
+        title: item.title,
+        thumbnail: item.thumbnail ?? "",
+        sourceUrl: item.url
+      ))
+      await refreshRemoteStatus()
+    } catch {
+      lastRemoteError = error.localizedDescription
+    }
+  }
+
+  func toggleRemotePause() async {
+    await sendRemoteCommand("pause_toggle")
+  }
+
+  func stopRemote() async {
+    await sendRemoteCommand("stop")
+  }
+
+  private func sendRemoteCommand(_ action: String) async {
+    await syncClientConfig()
+    do {
+      try await client.sendLocalCommand(.init(action: action))
+      await refreshRemoteStatus()
+    } catch {
+      lastRemoteError = error.localizedDescription
     }
   }
 }

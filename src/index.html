@@ -7,127 +7,125 @@
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  <div class="container">
+  <div class="container" id="appContainer">
+    <section id="playerPanel" class="play-cover hidden" aria-live="polite">
+      <div class="cover-art" aria-hidden="true"></div>
 
-    <!-- Idle View -->
-    <div id="idleView" class="view">
-      <input
-        type="text"
-        id="urlInput"
-        class="url-input"
-        placeholder="Search or Paste URL"
-        autocomplete="off"
-        spellcheck="false"
-      />
+      <div class="cover-copy">
+        <h1 class="stream-title" id="trackTitle">Nothing playing</h1>
+        <div class="stream-subtitle" id="trackSubtitle">Search or paste a URL below</div>
+      </div>
+
+      <div class="cover-progress">
+        <div class="bar">
+          <span class="fill" id="progressFill"></span>
+          <span class="knob" id="progressKnob"></span>
+        </div>
+        <div class="time-row">
+          <span id="elapsedTime">0:00</span>
+          <span id="durationTime">--:--</span>
+        </div>
+      </div>
+
+      <div class="cover-controls">
+        <button class="control saved" id="bookmarkBtn" title="Remove from playlist" aria-label="Remove from playlist" disabled>
+          <svg viewBox="0 0 18 18" fill="currentColor" aria-hidden="true">
+            <path d="M5 3.2h8a.8.8 0 0 1 .8.8v10.55L9 11.6l-4.8 2.95V4A.8.8 0 0 1 5 3.2Z"/>
+          </svg>
+        </button>
+        <button class="control" id="seekBackBtn" title="Back 10s" aria-label="Back 10 seconds" disabled>
+          <svg viewBox="0 0 18 18" fill="none" aria-hidden="true">
+            <path d="M10.4 4.2 5.8 9l4.6 4.8" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M13 4.2 8.4 9l4.6 4.8" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
+        <button class="control primary" id="pauseBtn" title="Pause" aria-label="Pause" disabled>
+          <svg viewBox="0 0 18 18" fill="currentColor" id="pauseIcon" aria-hidden="true">
+            <rect x="5" y="4" width="3" height="10" rx=".8"/>
+            <rect x="10" y="4" width="3" height="10" rx=".8"/>
+          </svg>
+          <svg viewBox="0 0 18 18" fill="currentColor" id="playIcon" class="hidden" aria-hidden="true">
+            <path d="M5.4 3.4 14 9l-8.6 5.6V3.4Z"/>
+          </svg>
+        </button>
+        <button class="control" id="seekFwdBtn" title="Forward 10s" aria-label="Forward 10 seconds" disabled>
+          <svg viewBox="0 0 18 18" fill="none" aria-hidden="true">
+            <path d="m7.6 4.2 4.6 4.8-4.6 4.8" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="m5 4.2 4.6 4.8L5 13.8" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
+        <button class="control stop" id="stopBtn" title="Stop" aria-label="Stop" disabled>
+          <svg viewBox="0 0 18 18" fill="currentColor" aria-hidden="true">
+            <rect x="5.3" y="5.3" width="7.4" height="7.4" rx="1.6"/>
+          </svg>
+        </button>
+        <button class="control list-control" id="playlistBtn" title="Open playlist" aria-label="Open playlist">
+          <svg viewBox="0 0 18 18" fill="none" aria-hidden="true">
+            <rect x="3.1" y="3.1" width="4.6" height="4.6" rx="1.05" stroke="currentColor" stroke-width="1.35"/>
+            <rect x="10.3" y="3.1" width="4.6" height="4.6" rx="1.05" stroke="currentColor" stroke-width="1.35"/>
+            <rect x="3.1" y="10.3" width="4.6" height="4.6" rx="1.05" stroke="currentColor" stroke-width="1.35"/>
+            <rect x="10.3" y="10.3" width="4.6" height="4.6" rx="1.05" stroke="currentColor" stroke-width="1.35"/>
+          </svg>
+        </button>
+      </div>
+    </section>
+
+    <section id="gridView" class="playlist-grid">
+      <button id="compactNow" class="compact-now hidden" type="button" title="Back to player">
+        <div class="compact-cover" id="compactCover"></div>
+        <div class="compact-copy">
+          <div class="compact-kicker">Now playing</div>
+          <div class="compact-title" id="compactTitle">Nothing playing</div>
+          <div class="compact-sub" id="compactSub"></div>
+        </div>
+        <div class="compact-runtime" id="compactRuntime">--:--</div>
+      </button>
+
+      <div class="url-row">
+        <input
+          type="text"
+          id="urlInput"
+          placeholder="Search or Paste URL"
+          autocomplete="off"
+          spellcheck="false"
+        />
+        <button class="url-add" id="submitInputBtn" type="button" aria-label="Submit">
+          <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <path d="M3 8h8.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+            <path d="m8.5 4 3.5 4-3.5 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
+      </div>
+
       <div id="error" class="error hidden"></div>
       <div id="loading" class="loading hidden">
         <div class="spinner"></div>
         <span id="loadingText">Connecting...</span>
       </div>
-      <div id="searchResults" class="search-results hidden">
-        <div class="section-header">
-          <span class="section-title">Results</span>
-          <button class="show-more" id="clearSearchBtn">Clear</button>
-        </div>
-        <div class="history-list" id="searchResultsList"></div>
-      </div>
-      <div id="idleHistorySection">
-        <div class="divider"></div>
-        <div class="section-header">
-          <span class="section-title">Recent</span>
-          <button class="show-more" id="showMoreBtn">Show All</button>
-        </div>
-        <div class="history-list" id="historyList"></div>
-      </div>
-    </div>
 
-    <!-- Offline View -->
-    <div id="offlineView" class="view hidden">
+      <div id="searchResults" class="grid-section hidden">
+        <div class="grid-meta">
+          <div class="grid-title">Results</div>
+          <button class="soft-action" id="clearSearchBtn" type="button">Clear</button>
+        </div>
+        <div class="stream-grid" id="searchResultsList"></div>
+      </div>
+
+      <div id="librarySection" class="grid-section">
+        <div class="grid-meta">
+          <div class="grid-title">Streams</div>
+          <div class="grid-note" id="gridNote">Playlist</div>
+        </div>
+        <div class="stream-grid" id="historyList"></div>
+      </div>
+    </section>
+
+    <section id="offlineView" class="offline-view hidden">
       <div class="offline-content">
         <div class="offline-message">Something went wrong</div>
-        <button class="restart-btn" id="restartBtn">Restart</button>
+        <button class="restart-btn" id="restartBtn" type="button">Restart</button>
       </div>
-    </div>
-
-    <!-- Playing View -->
-    <div id="playingView" class="view hidden">
-      <div class="now-playing">
-        <div class="np-thumbnail" id="npThumbnail"></div>
-        <div class="np-info">
-          <div class="np-title" id="trackTitle"></div>
-          <div class="np-subtitle" id="trackSubtitle"></div>
-        </div>
-      </div>
-
-      <div class="controls">
-        <button class="ctrl-btn" id="prevBtn" title="Previous track">
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-            <rect x="2" y="3" width="2" height="10" rx="0.5" fill="currentColor"/>
-            <path d="M6 8L12 3.5V12.5L6 8Z" fill="currentColor"/>
-          </svg>
-        </button>
-        <button class="ctrl-btn" id="seekBackBtn" title="Back 10s">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
-            <path d="M12.5 4V1L7.5 5L12.5 9V6C16.09 6 19 8.91 19 12.5C19 16.09 16.09 19 12.5 19C8.91 19 6 16.09 6 12.5H4C4 17.19 7.81 21 12.5 21C17.19 21 21 17.19 21 12.5C21 7.81 17.19 4 12.5 4Z" fill="currentColor"/>
-            <text x="10" y="14.5" font-size="7" font-weight="700" fill="currentColor" text-anchor="middle" font-family="-apple-system, sans-serif">10</text>
-          </svg>
-        </button>
-        <button class="ctrl-btn primary" id="pauseBtn" title="Pause">
-          <svg width="18" height="18" viewBox="0 0 18 18" fill="none" id="pauseIcon">
-            <rect x="4" y="3" width="3.5" height="12" rx="1" fill="currentColor"/>
-            <rect x="10.5" y="3" width="3.5" height="12" rx="1" fill="currentColor"/>
-          </svg>
-          <svg width="18" height="18" viewBox="0 0 18 18" fill="none" id="playIcon" class="hidden">
-            <path d="M5 3L15 9L5 15V3Z" fill="currentColor"/>
-          </svg>
-        </button>
-        <button class="ctrl-btn" id="seekFwdBtn" title="Forward 10s">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
-            <path d="M11.5 4V1L16.5 5L11.5 9V6C7.91 6 5 8.91 5 12.5C5 16.09 7.91 19 11.5 19C15.09 19 18 16.09 18 12.5H20C20 17.19 16.19 21 11.5 21C6.81 21 3 17.19 3 12.5C3 7.81 6.81 4 11.5 4Z" fill="currentColor"/>
-            <text x="14" y="14.5" font-size="7" font-weight="700" fill="currentColor" text-anchor="middle" font-family="-apple-system, sans-serif">10</text>
-          </svg>
-        </button>
-        <button class="ctrl-btn" id="nextBtn" title="Next track">
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-            <path d="M4 3.5L10 8L4 12.5V3.5Z" fill="currentColor"/>
-            <rect x="12" y="3" width="2" height="10" rx="0.5" fill="currentColor"/>
-          </svg>
-        </button>
-        <button class="ctrl-btn stop" id="stopBtn" title="Stop">
-          <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-            <rect x="2" y="2" width="10" height="10" rx="1.5" fill="currentColor"/>
-          </svg>
-        </button>
-      </div>
-
-      <div class="volume-row">
-        <svg class="vol-icon" width="16" height="16" viewBox="0 0 24 24" fill="none">
-          <path d="M5 9V15H9L14 20V4L9 9H5Z" fill="currentColor"/>
-        </svg>
-        <input type="range" class="volume-slider" id="volumeSlider" min="0" max="100" value="75" />
-        <svg class="vol-icon" width="16" height="16" viewBox="0 0 24 24" fill="none">
-          <path d="M5 9V15H9L14 20V4L9 9H5Z" fill="currentColor"/>
-          <path d="M18.5 12C18.5 10.23 17.48 8.71 16 7.97V16.02C17.48 15.29 18.5 13.77 18.5 12Z" fill="currentColor"/>
-          <path d="M16 3.23V5.29C18.89 6.15 21 8.83 21 12C21 15.17 18.89 17.85 16 18.71V20.77C20.01 19.86 23 16.28 23 12C23 7.72 20.01 4.14 16 3.23Z" fill="currentColor"/>
-        </svg>
-      </div>
-
-      <div class="divider"></div>
-
-      <input
-        type="text"
-        id="urlInputPlaying"
-        class="url-input small"
-        placeholder="Search or Paste URL..."
-        autocomplete="off"
-        spellcheck="false"
-      />
-      <div id="playingHistory" class="playing-history hidden">
-        <div class="history-list" id="playingHistoryList"></div>
-      </div>
-    </div>
-
-
+    </section>
   </div>
 
   <script src="main.js"></script>

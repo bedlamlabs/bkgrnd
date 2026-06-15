@@ -1,8 +1,9 @@
 mod config;
 mod history;
 mod mpv;
-mod playlists;
 mod player;
+mod playlists;
+mod spotify;
 mod wopr_sync;
 mod ytdlp;
 
@@ -17,8 +18,10 @@ use tauri_plugin_positioner::{Position, WindowExt};
 use tokio::sync::Mutex;
 
 #[tauri::command]
-fn quit_app(app: AppHandle) {
+async fn quit_app(app: AppHandle, state: tauri::State<'_, SharedState>) -> Result<(), String> {
+    let _ = player::stop(state.inner().clone()).await;
     app.exit(0);
+    Ok(())
 }
 
 #[tauri::command]
@@ -31,12 +34,12 @@ fn hide_window(app: AppHandle) {
 #[tauri::command]
 fn resize_window(height: f64, app: AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
-        let scale = window.scale_factor().unwrap_or(1.0);
         let current_size = window.outer_size().unwrap_or_default();
-        let physical_height = (height * scale) as u32;
-        let _ = window.set_size(tauri::Size::Physical(tauri::PhysicalSize {
-            width: current_size.width,
-            height: physical_height,
+        let scale = window.scale_factor().unwrap_or(1.0);
+        let logical_width = current_size.width as f64 / scale;
+        let _ = window.set_size(tauri::Size::Logical(tauri::LogicalSize {
+            width: logical_width,
+            height,
         }));
     }
 }
@@ -64,10 +67,7 @@ fn set_tray_state(state: String, app: AppHandle) {
 }
 
 #[tauri::command]
-async fn search(
-    query: String,
-    app: AppHandle,
-) -> Result<Vec<ytdlp::SearchResult>, String> {
+async fn search(query: String, app: AppHandle) -> Result<Vec<ytdlp::SearchResult>, String> {
     let trimmed = query.trim();
     if trimmed.is_empty() {
         return Err("Search query is empty".to_string());
@@ -81,10 +81,12 @@ async fn play(
     app: AppHandle,
     state: tauri::State<'_, SharedState>,
 ) -> Result<PlayerStatus, String> {
-    let re = regex::Regex::new(r"^https?://(www\.)?(youtube\.com|youtu\.be|music\.youtube\.com)/")
-        .unwrap();
+    let re = regex::Regex::new(
+        r"^(https?://(www\.)?(youtube\.com|youtu\.be|music\.youtube\.com|open\.spotify\.com)/|spotify:(playlist|album|track):)",
+    )
+    .unwrap();
     if !re.is_match(&url) {
-        return Err("Not a YouTube URL".to_string());
+        return Err("Not a YouTube or Spotify URL".to_string());
     }
     player::play(&url, app, state.inner().clone()).await
 }
@@ -107,6 +109,36 @@ async fn get_status(state: tauri::State<'_, SharedState>) -> Result<PlayerStatus
 #[tauri::command]
 fn get_history() -> Vec<history::HistoryEntry> {
     history::load_history()
+}
+
+#[tauri::command]
+fn get_playlists() -> playlists::PlaylistDoc {
+    playlists::load_or_derive_playlists()
+}
+
+#[tauri::command]
+fn save_playlist_item(
+    url: String,
+    title: String,
+    thumbnail: String,
+    channel: String,
+    duration: Option<f64>,
+) -> playlists::PlaylistDoc {
+    playlists::save_item(playlists::PlaylistItem {
+        url,
+        title,
+        channel,
+        thumbnail,
+        duration,
+        added_at: String::new(),
+    })
+}
+
+#[tauri::command]
+fn remove_playlist_item(url: String) -> playlists::PlaylistDoc {
+    let doc = playlists::remove_item(&url);
+    history::remove_from_history(&url);
+    doc
 }
 
 #[tauri::command]
@@ -168,9 +200,9 @@ pub fn run() {
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
             let separator = PredefinedMenuItem::separator(app)?;
-            let quit_item =
-                MenuItem::with_id(app, "quit", "Quit bkgrnd", true, None::<&str>)?;
+            let quit_item = MenuItem::with_id(app, "quit", "Quit bkgrnd", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&separator, &quit_item])?;
+            let menu_state = app.state::<SharedState>().inner().clone();
 
             let icon = tauri::include_image!("icons/icon.png");
 
@@ -180,9 +212,14 @@ pub fn run() {
                 .menu(&menu)
                 .show_menu_on_left_click(false)
                 .tooltip("bkgrnd")
-                .on_menu_event(|app, event| {
+                .on_menu_event(move |app, event| {
                     if event.id.as_ref() == "quit" {
-                        app.exit(0);
+                        let app_handle = app.clone();
+                        let state = menu_state.clone();
+                        tauri::async_runtime::spawn(async move {
+                            let _ = player::stop(state).await;
+                            app_handle.exit(0);
+                        });
                     }
                 })
                 .on_tray_icon_event(|tray, event| {
@@ -194,9 +231,7 @@ pub fn run() {
                             button_state: MouseButtonState::Up,
                             ..
                         } => {
-                            if let Some(window) =
-                                tray.app_handle().get_webview_window("main")
-                            {
+                            if let Some(window) = tray.app_handle().get_webview_window("main") {
                                 toggle_window(&window);
                             }
                         }
@@ -216,9 +251,14 @@ pub fn run() {
                 });
             }
 
-            // Best-effort playlist sync to WOPR (no UI impact; safe to fail)
+            // Best-effort playlist sync and WOPR remote control (no UI impact; safe to fail)
+            let app_handle = app.handle().clone();
+            let shared_state = app.state::<SharedState>().inner().clone();
             tauri::async_runtime::spawn(async {
-                wopr_sync::sync_loop().await;
+                mpv::stop_stale_mpv().await;
+            });
+            tauri::async_runtime::spawn(async {
+                wopr_sync::sync_loop(app_handle, shared_state).await;
             });
 
             Ok(())
@@ -234,6 +274,9 @@ pub fn run() {
             stop,
             get_status,
             get_history,
+            get_playlists,
+            save_playlist_item,
+            remove_playlist_item,
             play_next,
             play_prev,
             seek_relative,

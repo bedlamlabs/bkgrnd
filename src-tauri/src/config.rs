@@ -26,4 +26,3 @@ pub fn load_config() -> BkgrndConfig {
         Err(_) => BkgrndConfig::default(),
     }
 }
-

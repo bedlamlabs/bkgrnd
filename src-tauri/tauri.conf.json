@@ -13,15 +13,16 @@
       {
         "title": "bkgrnd",
         "label": "main",
-        "width": 320,
+        "width": 300,
         "height": 200,
-        "minWidth": 320,
+        "minWidth": 300,
         "minHeight": 120,
         "maxHeight": 600,
         "resizable": false,
         "visible": false,
         "decorations": false,
         "transparent": true,
+        "shadow": false,
         "alwaysOnTop": true,
         "skipTaskbar": true,
         "focus": false

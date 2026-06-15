@@ -18,7 +18,10 @@ Click the menubar icon to open the popover. Paste a YouTube URL and press Enter.
 - **Single videos** — extracts audio via yt-dlp, plays through mpv
 - **Playlists** — enumerates tracks, auto-advances, shows queue position
 - **Live streams** — works with YouTube live streams
+- **Spotify playlists/albums** — uses Spotify metadata to build a YouTube-backed queue
 - **History** — recent plays saved to `~/.bkgrnd/history.json`
+
+Spotify URLs do not play Spotify streams directly. bkgrnd reads the Spotify track list, searches YouTube for each track, and plays the resulting YouTube matches. Set `BKGRND_SPOTIFY_CLIENT_ID` and `BKGRND_SPOTIFY_CLIENT_SECRET` for Spotify Web API metadata access, or provide `BKGRND_SPOTIFY_ACCESS_TOKEN`. `BKGRND_SPOTIFY_MAX_TRACKS` limits conversion size and defaults to 75.
 
 ### Controls
 

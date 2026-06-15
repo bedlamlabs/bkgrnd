@@ -1,9 +1,22 @@
-use crate::playlists;
 use crate::config;
+use crate::player::{self, PlayerStatus, SharedState};
+use crate::playlists;
 use reqwest::header::{HeaderMap, HeaderValue};
+use serde::Deserialize;
+use tauri::AppHandle;
 
-const DEFAULT_BASE_URL: &str = "http://worp.thriveos.pro:808";
+const DEFAULT_BASE_URL: &str = "https://bkgrnd.bedl.am";
 const PLAYLISTS_PATH: &str = "/api/v1/playlists";
+const LOCAL_STATUS_PATH: &str = "/api/v1/local/status";
+const LOCAL_COMMAND_NEXT_PATH: &str = "/api/v1/local/commands/next";
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LocalPlaybackCommand {
+    action: String,
+    #[serde(default)]
+    url: String,
+}
 
 fn base_url() -> String {
     // Priority: env var > config.yaml > default
@@ -27,7 +40,7 @@ fn auth_headers() -> HeaderMap {
         if let Ok(val) = HeaderValue::from_str(&format!("Bearer {}", token)) {
             headers.insert(reqwest::header::AUTHORIZATION, val);
         }
-     }
+    }
     headers
 }
 
@@ -93,18 +106,14 @@ pub async fn sync_once() {
     }
 
     // Fetch remote doc (best-effort)
-    let remote: Option<playlists::PlaylistDoc> = match client
-        .get(&url)
-        .headers(auth_headers())
-        .send()
-        .await
-    {
-        Ok(resp) if resp.status().is_success() => match resp.text().await {
-            Ok(text) => serde_yaml::from_str(&text).ok(),
-            Err(_) => None,
-        },
-        _ => None,
-    };
+    let remote: Option<playlists::PlaylistDoc> =
+        match client.get(&url).headers(auth_headers()).send().await {
+            Ok(resp) if resp.status().is_success() => match resp.text().await {
+                Ok(text) => serde_yaml::from_str(&text).ok(),
+                Err(_) => None,
+            },
+            _ => None,
+        };
 
     match remote {
         None => {
@@ -131,12 +140,94 @@ pub async fn sync_once() {
     }
 }
 
-pub async fn sync_loop() {
-    // Run immediately, then every ~60s.
+async fn publish_status(client: &reqwest::Client, app_state: SharedState) {
+    let status: PlayerStatus = match player::get_status(app_state).await {
+        Ok(status) => status,
+        Err(_) => PlayerStatus::empty(),
+    };
+
+    let base = base_url();
+    let url = format!("{}{}", base.trim_end_matches('/'), LOCAL_STATUS_PATH);
+    let _ = client
+        .put(url)
+        .headers(auth_headers())
+        .json(&status)
+        .send()
+        .await;
+}
+
+async fn poll_command(client: &reqwest::Client) -> Option<LocalPlaybackCommand> {
+    let base = base_url();
+    let url = format!("{}{}", base.trim_end_matches('/'), LOCAL_COMMAND_NEXT_PATH);
+    let resp = client.get(url).headers(auth_headers()).send().await.ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    resp.json::<Option<LocalPlaybackCommand>>()
+        .await
+        .ok()
+        .flatten()
+}
+
+async fn control_once(client: &reqwest::Client, app: AppHandle, app_state: SharedState) {
+    publish_status(client, app_state.clone()).await;
+
+    let Some(command) = poll_command(client).await else {
+        return;
+    };
+
+    match command.action.as_str() {
+        "play" if !command.url.trim().is_empty() => {
+            if is_allowed_play_url(&command.url) {
+                let _ = player::play(&command.url, app, app_state.clone()).await;
+            }
+        }
+        "pause_toggle" => {
+            let _ = player::toggle_pause(app_state.clone()).await;
+        }
+        "stop" => {
+            let _ = player::stop(app_state.clone()).await;
+        }
+        _ => {}
+    }
+
+    publish_status(client, app_state).await;
+}
+
+fn is_allowed_play_url(url: &str) -> bool {
+    let trimmed = url.trim();
+    trimmed.starts_with("https://www.youtube.com/")
+        || trimmed.starts_with("https://youtube.com/")
+        || trimmed.starts_with("https://youtu.be/")
+        || trimmed.starts_with("https://music.youtube.com/")
+        || trimmed.starts_with("https://open.spotify.com/")
+        || trimmed.starts_with("spotify:playlist:")
+        || trimmed.starts_with("spotify:album:")
+        || trimmed.starts_with("spotify:track:")
+}
+
+pub async fn sync_loop(app: AppHandle, app_state: SharedState) {
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+    {
+        Ok(c) => c,
+        Err(_) => return,
+    };
+
+    // Run immediately, then keep playlist sync and remote control heartbeats independent.
     sync_once().await;
-    let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+    control_once(&client, app.clone(), app_state.clone()).await;
+
+    let mut control_interval = tokio::time::interval(std::time::Duration::from_secs(2));
+    let mut control_ticks = 0u32;
     loop {
-        interval.tick().await;
-        sync_once().await;
+        control_interval.tick().await;
+        control_ticks = control_ticks.saturating_add(1);
+        control_once(&client, app.clone(), app_state.clone()).await;
+        if control_ticks >= 30 {
+            control_ticks = 0;
+            sync_once().await;
+        }
     }
 }

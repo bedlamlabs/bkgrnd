@@ -4,3 +4,9 @@ build/
 target/
 .DS_Store
 src-tauri/binaries/
+*.xcuserstate
+xcuserdata/
+mockups/current-*.png
+mockups/original-*.webp
+mockups/player-layout-comparison.html
+mockups/width-comparison-*.html

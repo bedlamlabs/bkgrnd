@@ -18,21 +18,24 @@ final class AudioPlayer: ObservableObject {
     let asset = AVURLAsset(url: url, options: assetOptions)
     let item = AVPlayerItem(asset: asset)
     let p = AVPlayer(playerItem: item)
-    player = p
 
     if let timeObserver {
-      p.removeTimeObserver(timeObserver)
+      player?.removeTimeObserver(timeObserver)
       self.timeObserver = nil
     }
+
+    player = p
 
     timeObserver = p.addPeriodicTimeObserver(
       forInterval: CMTime(seconds: 0.5, preferredTimescale: 600),
       queue: DispatchQueue.main
-    ) { [weak self] (t: CMTime) in
-      guard let self else { return }
-      self.currentTime = t.seconds
-      if let d = p.currentItem?.duration.seconds, d.isFinite {
-        self.duration = d
+    ) { [weak self, weak p] (t: CMTime) in
+      Task { @MainActor in
+        guard let self else { return }
+        self.currentTime = t.seconds
+        if let d = p?.currentItem?.duration.seconds, d.isFinite {
+          self.duration = d
+        }
       }
     }
 
