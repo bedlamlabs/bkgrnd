@@ -8,13 +8,14 @@ REPO_URL="${HPX_REPO_URL:-https://github.com/bedlamlabs/bkgrnd.git}"
 BRANCH="${HPX_BRANCH:-main}"
 MODE="${1:-connect}"
 SSH_BIN="${SSH_BIN:-/usr/bin/ssh}"
+COMPOSE_SERVICE="${HPX_COMPOSE_SERVICE:-bkgrnd}"
 
-if [[ "$MODE" != "connect" && "$MODE" != "deploy" ]]; then
-  echo "Usage: $0 [connect|deploy]" >&2
+if [[ "$MODE" != "connect" && "$MODE" != "deploy" && "$MODE" != "inspect" ]]; then
+  echo "Usage: $0 [connect|deploy|inspect]" >&2
   exit 2
 fi
 
-"$SSH_BIN" "$HOST" bash -s -- "$APP_ROOT" "$REPO_DIR" "$REPO_URL" "$BRANCH" "$MODE" <<'REMOTE'
+"$SSH_BIN" "$HOST" bash -s -- "$APP_ROOT" "$REPO_DIR" "$REPO_URL" "$BRANCH" "$MODE" "$COMPOSE_SERVICE" <<'REMOTE'
 set -euo pipefail
 
 APP_ROOT="$1"
@@ -22,6 +23,7 @@ REPO_DIR="$2"
 REPO_URL="$3"
 BRANCH="$4"
 MODE="$5"
+COMPOSE_SERVICE="$6"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 
 echo "HPX app root: $APP_ROOT"
@@ -35,6 +37,22 @@ if ! command -v git >/dev/null 2>&1; then
 fi
 
 mkdir -p "$APP_ROOT"
+
+if [[ "$MODE" == "inspect" ]]; then
+  echo "Compose root listing:"
+  find "$APP_ROOT" -maxdepth 2 -type f \( -name 'compose*.yml' -o -name 'docker-compose*.yml' -o -name '.env' -o -name '.env.*' \) -print | sort
+  echo
+  echo "Recent bkgrnd backups:"
+  find "$APP_ROOT" -maxdepth 1 -type d -name 'bkgrnd.bak.*' -print | sort | tail -5
+  echo
+  echo "Compose env references:"
+  for file in "$APP_ROOT"/compose*.yml "$APP_ROOT"/docker-compose*.yml; do
+    [[ -f "$file" ]] || continue
+    echo "--- $file"
+    grep -nE 'env_file|\.env|bkgrnd|build:|context:|image:' "$file" || true
+  done
+  exit 0
+fi
 
 if [[ -d "$REPO_DIR/.git" ]]; then
   echo "Existing git worktree found. Updating remote metadata only."
@@ -77,6 +95,11 @@ if ! command -v docker >/dev/null 2>&1; then
 fi
 
 cd "$APP_ROOT"
+if [[ ! -f "$APP_ROOT/.env" ]]; then
+  printf '# Created by bkgrnd HPX deploy wrapper so Docker Compose can parse shared env_file references.\n' > "$APP_ROOT/.env"
+  echo "Created missing shared Compose env placeholder: $APP_ROOT/.env"
+fi
+
 if docker compose version >/dev/null 2>&1; then
   COMPOSE=(docker compose)
 elif command -v docker-compose >/dev/null 2>&1; then
@@ -86,6 +109,7 @@ else
   exit 1
 fi
 
-echo "Rebuilding bkgrnd through Docker Compose"
-"${COMPOSE[@]}" up -d --build bkgrnd-hpx 2>/dev/null || "${COMPOSE[@]}" up -d --build
+echo "Rebuilding $COMPOSE_SERVICE through Docker Compose"
+"${COMPOSE[@]}" up -d --build "$COMPOSE_SERVICE"
+"${COMPOSE[@]}" ps "$COMPOSE_SERVICE"
 REMOTE
