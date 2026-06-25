@@ -662,6 +662,27 @@ async fn thumbnail_image(
     resp
 }
 
+/// Parse an HTTP Range header of the form `bytes=START-[END]` (first range only),
+/// returning the start offset and optional end. Suffix ranges (`bytes=-N`) and malformed
+/// values fall back to `(0, None)`.
+fn parse_range_start_end(range: Option<&str>) -> (u64, Option<u64>) {
+    let Some(spec) = range.and_then(|r| r.trim().strip_prefix("bytes=")) else {
+        return (0, None);
+    };
+    let first = spec.split(',').next().unwrap_or("").trim();
+    let mut parts = first.splitn(2, '-');
+    let start = parts.next().unwrap_or("").trim().parse::<u64>().ok();
+    let end = parts
+        .next()
+        .map(str::trim)
+        .filter(|e| !e.is_empty())
+        .and_then(|e| e.parse::<u64>().ok());
+    match start {
+        Some(s) => (s, end),
+        None => (0, None),
+    }
+}
+
 // Stable-ish endpoint: client asks for /stream?url=... and we resolve a fresh direct media URL and proxy bytes.
 // For a production-grade design we'd support resume/range + caching; keep minimal for personal use.
 async fn stream_audio(
@@ -691,9 +712,29 @@ async fn stream_audio(
     }
 
     // Proxy stream bytes to client (support Range for iOS scrubbing/reconnects).
-    let mut req = state.http.get(direct_url);
-    if let Some(range) = headers.get(header::RANGE).and_then(|v| v.to_str().ok()) {
-        req = req.header(header::RANGE, range);
+    //
+    // YouTube throttles open-ended progressive downloads to ~playback speed but serves
+    // bounded byte-ranges at full speed. iOS issues an open-ended `Range: bytes=0-` to
+    // stream, which—forwarded verbatim—gets throttled to ~real-time and stalls playback.
+    // So for progressive audio we always request a bounded chunk upstream (capping any
+    // open-ended client range); iOS pulls later chunks via follow-up Range requests.
+    // HLS manifests (live streams) are tiny text playlists and are proxied verbatim.
+    let is_hls = direct_url.contains("/manifest/")
+        || direct_url.contains("hls_playlist")
+        || direct_url.contains(".m3u8");
+    let mut req = state.http.get(direct_url.as_str());
+    if is_hls {
+        if let Some(range) = headers.get(header::RANGE).and_then(|v| v.to_str().ok()) {
+            req = req.header(header::RANGE, range);
+        }
+    } else {
+        const PROXY_CHUNK: u64 = 8 * 1024 * 1024;
+        let (start, client_end) =
+            parse_range_start_end(headers.get(header::RANGE).and_then(|v| v.to_str().ok()));
+        let end = client_end
+            .map(|e| e.min(start + PROXY_CHUNK - 1))
+            .unwrap_or(start + PROXY_CHUNK - 1);
+        req = req.header(header::RANGE, format!("bytes={}-{}", start, end));
     }
 
     let upstream = match req.send().await {
