@@ -34,7 +34,7 @@ struct AppState {
     stream_failures: Arc<Mutex<HashMap<String, CachedStreamFailure>>>,
     stream_resolves: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
     local_status: Arc<Mutex<Option<LocalStatusRecord>>>,
-    local_commands: Arc<Mutex<VecDeque<LocalPlaybackCommand>>>,
+    local_commands: Arc<Mutex<VecDeque<(Instant, LocalPlaybackCommand)>>>,
     next_local_command_id: Arc<Mutex<u64>>,
 }
 
@@ -492,7 +492,7 @@ async fn post_local_command(
     *next_id += 1;
 
     let mut commands = state.local_commands.lock().await;
-    commands.push_back(command.clone());
+    commands.push_back((Instant::now(), command.clone()));
     while commands.len() > 50 {
         commands.pop_front();
     }
@@ -509,12 +509,17 @@ async fn get_next_local_command(
         return StatusCode::UNAUTHORIZED.into_response();
     }
 
+    // Drop commands that have been waiting too long: if the Mac was offline when
+    // the phone enqueued taps, we don't want them to replay minutes later.
+    const COMMAND_TTL: Duration = Duration::from_secs(30);
     let mut commands = state.local_commands.lock().await;
-    if let Some(command) = commands.pop_front() {
-        Json(Some(command)).into_response()
-    } else {
-        Json(Option::<LocalPlaybackCommand>::None).into_response()
+    let now = Instant::now();
+    while let Some((enqueued_at, command)) = commands.pop_front() {
+        if now.duration_since(enqueued_at) <= COMMAND_TTL {
+            return Json(Some(command)).into_response();
+        }
     }
+    Json(Option::<LocalPlaybackCommand>::None).into_response()
 }
 
 #[derive(Debug, Deserialize)]
@@ -816,7 +821,7 @@ async fn resolve_stream_url(state: &AppState, url: &str) -> Result<ResolvedStrea
 
     let start = Instant::now();
     let mut resolved_source = "yt-dlp".to_string();
-    let resolved = match resolve_direct_url(url).await {
+    let resolve_result: Result<String, StreamResolveError> = match resolve_direct_url(url).await {
         Ok(url) => Ok(url),
         Err(e) if e.terminal => {
             let mut failures = state.stream_failures.lock().await;
@@ -832,14 +837,27 @@ async fn resolve_stream_url(state: &AppState, url: &str) -> Result<ResolvedStrea
         }
         Err(primary_error) => {
             error!("resolve_direct_url failed: {primary_error}");
-            let fallback = resolve_via_piped(&state.http, url).await.map_err(|fallback_error| {
-                error!("resolve_via_piped failed: {fallback_error:#}");
-                primary_error
-            })?;
-            resolved_source = "piped".to_string();
-            Ok(fallback)
+            match resolve_via_piped(&state.http, url).await {
+                Ok(fallback) => {
+                    resolved_source = "piped".to_string();
+                    Ok(fallback)
+                }
+                Err(fallback_error) => {
+                    error!("resolve_via_piped failed: {fallback_error:#}");
+                    Err(primary_error)
+                }
+            }
         }
-    }?;
+    };
+
+    // Always release the per-URL resolve slot, including on the error paths, so
+    // `stream_resolves` cannot grow unbounded with one Arc<Mutex> per failed URL.
+    {
+        let mut resolves = state.stream_resolves.lock().await;
+        resolves.remove(url);
+    }
+
+    let resolved = resolve_result?;
 
     info!(
         "resolved stream url via {} in {}ms",
@@ -857,9 +875,6 @@ async fn resolve_stream_url(state: &AppState, url: &str) -> Result<ResolvedStrea
         },
     );
     drop(cache);
-
-    let mut resolves = state.stream_resolves.lock().await;
-    resolves.remove(url);
 
     Ok(ResolvedStream {
         url: resolved,
@@ -1179,7 +1194,24 @@ async fn main() -> anyhow::Result<()> {
     let data_dir = std::env::var("WOPR_DATA_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("./data"));
-    let bearer_token = std::env::var("WOPR_BEARER_TOKEN").ok();
+    let bearer_token = std::env::var("WOPR_BEARER_TOKEN")
+        .ok()
+        .filter(|t| !t.trim().is_empty());
+    let allow_no_auth = std::env::var("WOPR_ALLOW_NO_AUTH")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    if bearer_token.is_none() && !allow_no_auth {
+        anyhow::bail!(
+            "WOPR_BEARER_TOKEN is not set: refusing to start an unauthenticated server that can \
+             control local playback and run yt-dlp. Set WOPR_BEARER_TOKEN, or set \
+             WOPR_ALLOW_NO_AUTH=1 to deliberately run open (e.g. bound to a trusted private network)."
+        );
+    }
+    if bearer_token.is_none() {
+        tracing::warn!(
+            "WOPR_ALLOW_NO_AUTH is enabled: running with NO authentication; all endpoints are public."
+        );
+    }
 
     let http = reqwest::Client::builder()
         .connect_timeout(std::time::Duration::from_secs(10))

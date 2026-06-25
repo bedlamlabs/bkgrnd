@@ -166,6 +166,29 @@ pub async fn play(url: &str, app: AppHandle, state: SharedState) -> Result<Playe
             s.session = Some(session);
             s.current_title = info.title;
         }
+
+        // A single track has no queue to advance into, but we still must reap the
+        // process when it exits — otherwise `session` stays `Some` and status
+        // (tray icon + remote phone view) is stuck reporting "playing" forever.
+        let state_clone = state.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                let mut s = state_clone.lock().await;
+                match s.session {
+                    Some(ref mut session) => match session.child.try_wait() {
+                        Ok(Some(_)) => {
+                            s.session = None;
+                            return;
+                        }
+                        Ok(None) => continue,
+                        Err(_) => return,
+                    },
+                    None => return,
+                }
+            }
+        });
+
         get_status(state).await
     }
 }
