@@ -8,10 +8,10 @@
     <meta name="theme-color" content="#08090d" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-    <link rel="apple-touch-icon" sizes="180x180" href="assets/apple-touch-icon.png?v=16" />
+    <link rel="apple-touch-icon" sizes="180x180" href="assets/apple-touch-icon.png?v=20" />
 
-    <link rel="manifest" href="manifest.webmanifest?v=17" />
-    <link rel="stylesheet" href="styles.css?v=17" />
+    <link rel="manifest" href="manifest.webmanifest?v=20" />
+    <link rel="stylesheet" href="styles.css?v=20" />
   </head>
   <body>
     <header class="topbar">
@@ -66,34 +66,68 @@
     </main>
 
     <main id="playerView" class="screen player-screen">
-      <div class="view-bar">
-        <button id="closePlayerBtn" class="icon-btn" type="button" aria-label="Back">‹</button>
-        <div class="view-title">Now Playing <span id="playerStatusTag" class="status-tag hidden"></span></div>
-        <div class="spacer"></div>
-        <button id="shareBtn" class="icon-btn" type="button" aria-label="Share">↗</button>
+      <div class="np">
+        <img id="playerAmbient" class="np-ambient" alt="" aria-hidden="true" />
+        <div id="npSurface" class="np-surface">
+          <img id="playerArt" class="np-art" alt="" />
+          <div id="playerArtFallback" class="np-fallback hidden" aria-hidden="true">b</div>
+          <div class="np-scrim"></div>
+          <button id="closePlayerBtn" class="np-corner" type="button" aria-label="Back">
+            <svg viewBox="0 0 24 24" fill="none"><path d="M15 5l-7 7 7 7" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+          <span id="playerStatusBadge" class="np-badge hidden"><span class="np-dot"></span><span id="playerStatusTag" class="np-badge-text"></span></span>
+          <button id="openPlaylistBtn" class="np-corner np-corner-right" type="button" aria-label="Playlist">
+            <svg viewBox="0 0 24 24" fill="none"><rect x="4" y="4" width="7" height="7" rx="1.6" stroke="currentColor" stroke-width="1.9"/><rect x="13" y="4" width="7" height="7" rx="1.6" stroke="currentColor" stroke-width="1.9"/><rect x="4" y="13" width="7" height="7" rx="1.6" stroke="currentColor" stroke-width="1.9"/><rect x="13" y="13" width="7" height="7" rx="1.6" stroke="currentColor" stroke-width="1.9"/></svg>
+          </button>
+          <div id="npControls" class="np-controls">
+            <button id="seekBackBtn" class="np-ctrl" type="button" aria-label="Back 15 seconds">
+              <svg viewBox="0 0 24 24" fill="none"><path d="M11 7 6 12l5 5M18 7l-5 5 5 5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+            <button id="playerStopBtn" class="np-ctrl" type="button" aria-label="Stop">
+              <svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+            </button>
+            <button id="playerPauseBtn" class="np-ctrl np-primary" type="button" aria-label="Pause">Ⅱ</button>
+            <button id="seekForwardBtn" class="np-ctrl" type="button" aria-label="Forward 15 seconds">
+              <svg viewBox="0 0 24 24" fill="none"><path d="m13 7 5 5-5 5M6 7l5 5-5 5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+            <button id="shareBtn" class="np-ctrl" type="button" aria-label="Share">
+              <svg viewBox="0 0 24 24" fill="none"><path d="M12 15V4m0 0L8 8m4-4 4 4M6 13v5a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2v-5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+          </div>
+        </div>
+        <div class="np-meta">
+          <h1 id="playerTitle">Nothing playing</h1>
+          <p id="playerSub"></p>
+          <div class="player-progress" aria-label="Playback progress">
+            <div class="progress-track" id="progressTrack">
+              <span class="progress-fill" id="progressFill"></span>
+              <span class="progress-knob" id="progressKnob"></span>
+            </div>
+            <div class="time-row">
+              <span id="elapsedTime">0:00</span>
+              <span id="durationTime">--:--</span>
+            </div>
+          </div>
+        </div>
       </div>
-      <section class="hero-player">
-        <img id="playerArt" class="player-art" alt="" />
-        <div id="playerArtFallback" class="art-fallback hidden" aria-hidden="true">b</div>
-        <h1 id="playerTitle">Nothing playing</h1>
-        <p id="playerSub"></p>
-        <div class="player-progress" aria-label="Playback progress">
-          <div class="progress-track" id="progressTrack">
-            <span class="progress-fill" id="progressFill"></span>
-            <span class="progress-knob" id="progressKnob"></span>
+    </main>
+
+    <main id="playlistView" class="screen">
+      <div class="pl">
+        <img id="playlistAmbient" class="np-ambient" alt="" aria-hidden="true" />
+        <div class="pl-wrap">
+          <div class="pl-top">
+            <button id="closePlaylistBtn" class="pl-ic" type="button" aria-label="Back">
+              <svg viewBox="0 0 24 24" fill="none"><path d="M15 5l-7 7 7 7" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+            <span class="pl-lbl">Playlist</span>
+            <button class="pl-ic on" type="button" aria-label="Playlist" disabled>
+              <svg viewBox="0 0 24 24" fill="none"><rect x="4" y="4" width="7" height="7" rx="1.6" stroke="currentColor" stroke-width="1.9"/><rect x="13" y="4" width="7" height="7" rx="1.6" stroke="currentColor" stroke-width="1.9"/><rect x="4" y="13" width="7" height="7" rx="1.6" stroke="currentColor" stroke-width="1.9"/><rect x="13" y="13" width="7" height="7" rx="1.6" stroke="currentColor" stroke-width="1.9"/></svg>
+            </button>
           </div>
-          <div class="time-row">
-            <span id="elapsedTime">0:00</span>
-            <span id="durationTime">--:--</span>
-          </div>
+          <div id="playlistGrid" class="pl-grid"></div>
         </div>
-        <div class="controls">
-          <button id="seekBackBtn" class="circle-btn small" type="button" aria-label="Back 15 seconds">‹15</button>
-          <button id="playerStopBtn" class="circle-btn small" type="button" aria-label="Stop">■</button>
-          <button id="playerPauseBtn" class="circle-btn" type="button" aria-label="Pause">Ⅱ</button>
-          <button id="seekForwardBtn" class="circle-btn small" type="button" aria-label="Forward 15 seconds">15›</button>
-        </div>
-      </section>
+      </div>
     </main>
 
     <div id="miniPlayer" class="mini-player hidden" role="button" tabindex="0" aria-label="Open player">
@@ -121,6 +155,6 @@
     </dialog>
 
     <audio id="player" preload="none" playsinline></audio>
-    <script src="app.js?v=18"></script>
+    <script src="app.js?v=20"></script>
   </body>
 </html>

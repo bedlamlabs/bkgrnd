@@ -31,6 +31,14 @@ const closePlayerBtn = el("closePlayerBtn");
 const shareBtn = el("shareBtn");
 const playerArt = el("playerArt");
 const playerArtFallback = el("playerArtFallback");
+const playerAmbient = el("playerAmbient");
+const npSurface = el("npSurface");
+const openPlaylistBtn = el("openPlaylistBtn");
+const playlistView = el("playlistView");
+const playlistGrid = el("playlistGrid");
+const closePlaylistBtn = el("closePlaylistBtn");
+const playlistAmbient = el("playlistAmbient");
+const playerStatusBadge = el("playerStatusBadge");
 const playerTitle = el("playerTitle");
 const playerSub = el("playerSub");
 const playerStatusTag = el("playerStatusTag");
@@ -120,7 +128,10 @@ function setScreen(name) {
   homeView.classList.toggle("active", name === "home");
   searchView.classList.toggle("active", name === "search");
   playerView.classList.toggle("active", name === "player");
-  miniPlayer.classList.toggle("on-player-screen", name === "player");
+  playlistView.classList.toggle("active", name === "playlist");
+  miniPlayer.classList.toggle("on-player-screen", name === "player" || name === "playlist");
+  document.body.classList.toggle("immersive", name === "player" || name === "playlist");
+  if (name === "player") revealControls();
 }
 
 function setInline(node, text) {
@@ -130,8 +141,64 @@ function setInline(node, text) {
 }
 
 function setPlayerStatus(text) {
-  const label = String(text || "").replace(/\.+$/, "").trim() || "";
-  setInline(playerStatusTag, label.toLowerCase());
+  const label = String(text || "").replace(/\.+$/, "").trim();
+  let display = label.toLowerCase();
+  if (!display) {
+    const current = getCurrentNow();
+    if (current) display = isPaused() ? "paused" : "playing";
+  }
+  playerStatusTag.textContent = display;
+  playerStatusBadge.classList.toggle("hidden", !display);
+}
+
+let controlsTimer = null;
+function revealControls() {
+  if (!npSurface) return;
+  npSurface.classList.add("show");
+  if (controlsTimer) clearTimeout(controlsTimer);
+  controlsTimer = setTimeout(() => npSurface.classList.remove("show"), 3500);
+}
+function toggleControls() {
+  if (!npSurface) return;
+  if (npSurface.classList.contains("show")) {
+    npSurface.classList.remove("show");
+    if (controlsTimer) clearTimeout(controlsTimer);
+  } else {
+    revealControls();
+  }
+}
+
+// Upgrade an i.ytimg thumbnail URL to the crisp 16:9 maxres variant.
+function hiResThumb(url) {
+  const raw = String(url || "").trim();
+  if (!raw) return "";
+  return raw.replace(/\/(?:default|mqdefault|hqdefault|sddefault)\.jpg(\?.*)?$/i, "/maxresdefault.jpg$1");
+}
+
+// Load big artwork at maxres, falling back to the original (mq) then the fallback mark.
+function loadHeroArt(imgEl, ambientEl, url) {
+  const original = String(url || "").trim();
+  if (!original) {
+    imgEl.removeAttribute("src");
+    imgEl.classList.add("thumb-missing");
+    if (ambientEl) ambientEl.removeAttribute("src");
+    return;
+  }
+  imgEl.classList.remove("thumb-missing");
+  const maxres = hiResThumb(original);
+  let triedFallback = false;
+  imgEl.onerror = () => {
+    if (!triedFallback && imgEl.src !== original) {
+      triedFallback = true;
+      imgEl.src = original;
+    } else {
+      imgEl.onerror = null;
+      imgEl.removeAttribute("src");
+      imgEl.classList.add("thumb-missing");
+    }
+  };
+  imgEl.src = maxres;
+  if (ambientEl) ambientEl.src = maxres;
 }
 
 function stopAcquisitionStatus() {
@@ -445,12 +512,12 @@ async function playRemote(item) {
     return;
   }
 
-  setPlayerStatus("connecting");
   remoteNow = item;
   activeSourceItem = item;
   activeResolveMeta = null;
   renderMiniPlayer();
   renderPlayer();
+  setPlayerStatus("connecting");
 
   startAcquisitionStatus(sourceUrl);
   const streamUrl = await resolveStreamUrl(sourceUrl);
@@ -642,6 +709,7 @@ function renderPlayer() {
     playerSub.textContent = scopeLabel();
     playerArt.classList.add("hidden");
     playerArtFallback.classList.remove("hidden");
+    playerAmbient.removeAttribute("src");
     updateProgress();
     setPlayerStatus("");
     return;
@@ -649,11 +717,57 @@ function renderPlayer() {
 
   playerTitle.textContent = current.title || "Untitled";
   playerSub.textContent = current.channel || scopeLabel();
-  playerArt.classList.toggle("hidden", !current.thumbnail);
-  playerArtFallback.classList.toggle("hidden", Boolean(current.thumbnail));
-  if (current.thumbnail) playerArt.src = current.thumbnail;
+  const hasArt = Boolean(current.thumbnail);
+  playerArt.classList.toggle("hidden", !hasArt);
+  playerArtFallback.classList.toggle("hidden", hasArt);
+  if (hasArt) loadHeroArt(playerArt, playerAmbient, current.thumbnail);
+  else playerAmbient.removeAttribute("src");
   playerPauseBtn.textContent = isPaused() ? "▶" : "Ⅱ";
+  setPlayerStatus("");
   updateProgress();
+}
+
+function renderPlaylist() {
+  const items = libraryItems.length ? libraryItems : recentItems;
+  const current = getCurrentNow();
+  const currentUrl = current?.url || activeSourceUrl || "";
+  if (playlistAmbient) {
+    const art = current?.thumbnail || items[0]?.thumbnail || "";
+    if (art) playlistAmbient.src = hiResThumb(art);
+    else playlistAmbient.removeAttribute("src");
+  }
+  playlistGrid.innerHTML = "";
+  if (!items.length) {
+    playlistGrid.innerHTML = `<div class="scope-status" style="grid-column:1/-1">Nothing in the playlist yet.</div>`;
+    return;
+  }
+  for (const item of items.slice(0, 30)) {
+    const isNow = Boolean(item.url) && item.url === currentUrl;
+    const cell = document.createElement("button");
+    cell.className = "pl-cell" + (isNow ? " now" : "");
+    cell.type = "button";
+    cell.addEventListener("click", () => playFromPlaylist(item));
+    const ph = document.createElement("div");
+    ph.className = "pl-ph";
+    ph.appendChild(createArtwork(item.thumbnail, ""));
+    if (isNow) ph.insertAdjacentHTML("beforeend", `<span class="pl-eq">NOW</span>`);
+    const ch = document.createElement("div");
+    ch.className = "pl-ch";
+    ch.textContent = item.channel || "";
+    cell.appendChild(ph);
+    cell.appendChild(ch);
+    playlistGrid.appendChild(cell);
+  }
+}
+
+async function playFromPlaylist(item) {
+  if (activeScope === "local") {
+    await sendLocalCommand("play", item);
+    await refreshLocalStatus();
+  } else {
+    await playRemote(item);
+  }
+  setScreen("player");
 }
 
 function progressState() {
@@ -833,8 +947,16 @@ progressTrack.addEventListener("click", (event) => {
   audio.currentTime = audio.duration * pct;
   updateProgress();
 });
-playerArt.addEventListener("click", openCurrentSource);
-playerArtFallback.addEventListener("click", openCurrentSource);
+openPlaylistBtn.addEventListener("click", (event) => {
+  event.stopPropagation();
+  renderPlaylist();
+  setScreen("playlist");
+});
+closePlaylistBtn.addEventListener("click", () => setScreen("player"));
+npSurface.addEventListener("click", (event) => {
+  if (event.target.closest(".np-controls") || event.target.closest(".np-corner") || event.target.closest(".np-badge")) return;
+  toggleControls();
+});
 
 settingsBtn.addEventListener("click", () => {
   baseUrlInput.value = getBaseUrl();
