@@ -9,25 +9,25 @@
 <body>
   <div class="container" id="appContainer">
     <section id="playerPanel" class="play-cover hidden" aria-live="polite">
-      <div class="cover-art" aria-hidden="true"></div>
+      <div class="cover-stage">
+        <div class="cover-art" aria-hidden="true"></div>
 
-      <div class="cover-copy">
-        <h1 class="stream-title" id="trackTitle">Nothing playing</h1>
-        <div class="stream-subtitle" id="trackSubtitle">Search or paste a URL below</div>
-      </div>
-
-      <div class="cover-progress">
-        <div class="bar">
-          <span class="fill" id="progressFill"></span>
-          <span class="knob" id="progressKnob"></span>
+        <div class="subtle-top">
+          <span class="micro-status" id="microStatus">
+            <span class="pulse-dot"></span>
+            <span id="microStatusText">Playing</span>
+          </span>
+          <button class="ghost-icon" id="playlistBtn" title="Open playlist" aria-label="Open playlist">
+            <svg viewBox="0 0 18 18" fill="none" aria-hidden="true">
+              <rect x="3.1" y="3.1" width="4.6" height="4.6" rx="1.05" stroke="currentColor" stroke-width="1.5"/>
+              <rect x="10.3" y="3.1" width="4.6" height="4.6" rx="1.05" stroke="currentColor" stroke-width="1.5"/>
+              <rect x="3.1" y="10.3" width="4.6" height="4.6" rx="1.05" stroke="currentColor" stroke-width="1.5"/>
+              <rect x="10.3" y="10.3" width="4.6" height="4.6" rx="1.05" stroke="currentColor" stroke-width="1.5"/>
+            </svg>
+          </button>
         </div>
-        <div class="time-row">
-          <span id="elapsedTime">0:00</span>
-          <span id="durationTime">--:--</span>
-        </div>
-      </div>
 
-      <div class="cover-controls">
+        <div class="cover-controls">
         <button class="control saved" id="bookmarkBtn" title="Remove from playlist" aria-label="Remove from playlist" disabled>
           <svg viewBox="0 0 18 18" fill="currentColor" aria-hidden="true">
             <path d="M5 3.2h8a.8.8 0 0 1 .8.8v10.55L9 11.6l-4.8 2.95V4A.8.8 0 0 1 5 3.2Z"/>
@@ -59,14 +59,22 @@
             <rect x="5.3" y="5.3" width="7.4" height="7.4" rx="1.6"/>
           </svg>
         </button>
-        <button class="control list-control" id="playlistBtn" title="Open playlist" aria-label="Open playlist">
-          <svg viewBox="0 0 18 18" fill="none" aria-hidden="true">
-            <rect x="3.1" y="3.1" width="4.6" height="4.6" rx="1.05" stroke="currentColor" stroke-width="1.35"/>
-            <rect x="10.3" y="3.1" width="4.6" height="4.6" rx="1.05" stroke="currentColor" stroke-width="1.35"/>
-            <rect x="3.1" y="10.3" width="4.6" height="4.6" rx="1.05" stroke="currentColor" stroke-width="1.35"/>
-            <rect x="10.3" y="10.3" width="4.6" height="4.6" rx="1.05" stroke="currentColor" stroke-width="1.35"/>
-          </svg>
-        </button>
+        </div>
+      </div>
+
+      <div class="cover-meta">
+        <h1 class="stream-title" id="trackTitle">Nothing playing</h1>
+        <div class="stream-subtitle" id="trackSubtitle">Search or paste a URL below</div>
+        <div class="cover-progress">
+          <div class="bar">
+            <span class="fill" id="progressFill"></span>
+            <span class="knob" id="progressKnob"></span>
+          </div>
+          <div class="time-row">
+            <span id="elapsedTime">0:00</span>
+            <span id="durationTime">--:--</span>
+          </div>
+        </div>
       </div>
     </section>
 

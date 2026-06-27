@@ -34,6 +34,9 @@ const playlistBtn = document.getElementById('playlistBtn');
 const pauseIcon = document.getElementById('pauseIcon');
 const playIcon = document.getElementById('playIcon');
 
+const microStatus = document.getElementById('microStatus');
+const microStatusText = document.getElementById('microStatusText');
+
 const compactNow = document.getElementById('compactNow');
 const compactCover = document.getElementById('compactCover');
 const compactTitle = document.getElementById('compactTitle');
@@ -117,7 +120,7 @@ function setPendingPlayer(item) {
   currentStatus = null;
   trackTitle.textContent = 'Connecting...';
   trackSubtitle.textContent = sourceLabel(item?.url || '');
-  if (statusText) statusText.textContent = 'Connecting';
+  setMicroStatus('Connecting');
   setCoverImage(playerPanel, item?.thumbnail || '');
   setControlsEnabled(false);
   setProgress(null, null);
@@ -185,7 +188,7 @@ function updatePlayerSurface(status) {
   const title = status.title || 'Playing...';
   trackTitle.textContent = title;
   trackSubtitle.textContent = statusSubtitle(status);
-  if (statusText) statusText.textContent = status.isPaused ? 'Paused' : 'Playing';
+  setMicroStatus(status.isPaused ? 'Paused' : 'Playing');
 
   setCoverImage(playerPanel, thumbnailForStatus(status));
   setProgress(status.position, status.duration);
@@ -242,6 +245,10 @@ function setProgress(position, duration) {
   progressKnob.style.left = `${pct}%`;
   elapsedTime.textContent = formatDuration(pos) || '0:00';
   durationTime.textContent = formatDuration(dur) || '--:--';
+}
+
+function setMicroStatus(text) {
+  if (microStatusText) microStatusText.textContent = text || '';
 }
 
 // Library
@@ -329,55 +336,35 @@ function renderTile(item, { saved = false, search = false } = {}) {
     tile.classList.add('active');
   }
 
-  setCoverImage(tile, item.thumbnail);
+  const thumb = document.createElement('div');
+  thumb.className = 'stream-thumb';
+  setCoverImage(thumb, item.thumbnail);
 
-  const meta = tileMetaLabel(item, { saved, search });
-  if (meta) {
-    const metaEl = document.createElement('div');
-    metaEl.className = 'tile-meta';
-    metaEl.textContent = meta;
-    tile.appendChild(metaEl);
-  }
+  const ch = document.createElement('div');
+  ch.className = 'tile-ch';
+  ch.setAttribute('role', 'link');
+  ch.tabIndex = 0;
+  ch.textContent = item.channel || item.title || '';
 
-  if (saved) {
-    const removeBtn = document.createElement('button');
-    removeBtn.className = 'tile-bookmark';
-    removeBtn.type = 'button';
-    removeBtn.title = 'Remove from playlist';
-    removeBtn.setAttribute('aria-label', 'Remove from playlist');
-    removeBtn.innerHTML = bookmarkSvg();
-    removeBtn.addEventListener('click', (event) => {
-      event.stopPropagation();
-      removeSavedItem(item);
-    });
-    tile.appendChild(removeBtn);
-  }
-
-  const copy = document.createElement('div');
-  copy.className = 'tile-copy';
-  copy.innerHTML = `
-    <span class="tile-title" role="link" tabindex="0">${escapeHtml(item.title)}</span>
-    ${item.channel ? `<div class="tile-sub">${escapeHtml(item.channel)}</div>` : ''}
-  `;
-  tile.appendChild(copy);
+  tile.appendChild(thumb);
+  tile.appendChild(ch);
 
   const playTarget = search ? playUrlForSearchItem(item) : item.url;
   const play = () => playUrl(playTarget, item);
-  const titleBtn = copy.querySelector('.tile-title');
-  titleBtn.addEventListener('click', (event) => {
+  const openSrc = (event) => {
     event.stopPropagation();
     openExternalUrl(canonicalStreamUrl(item.url || playTarget));
-  });
-  titleBtn.addEventListener('keydown', (event) => {
+  };
+  ch.addEventListener('click', openSrc);
+  ch.addEventListener('keydown', (event) => {
     if (event.key === 'Enter' || event.key === ' ') {
       event.preventDefault();
-      event.stopPropagation();
-      openExternalUrl(canonicalStreamUrl(item.url || playTarget));
+      openSrc(event);
     }
   });
   tile.addEventListener('click', play);
   tile.addEventListener('keydown', (event) => {
-    if (event.target.closest('button, .tile-title')) return;
+    if (event.target.closest('.tile-ch')) return;
     if (event.key === 'Enter' || event.key === ' ') {
       event.preventDefault();
       play();
@@ -724,21 +711,44 @@ function thumbnailFromVideoId(videoId) {
   return videoId ? `https://i.ytimg.com/vi/${videoId}/mqdefault.jpg` : '';
 }
 
+const COVER_FALLBACK = 'linear-gradient(135deg, #28313a, #111318)';
+
 function setCoverImage(el, src) {
-  const fallback = 'linear-gradient(135deg, #28313a, #111318)';
   if (!src) {
     el.style.removeProperty('--cover-image');
-    el.style.backgroundImage = fallback;
+    el.style.backgroundImage = COVER_FALLBACK;
     return;
   }
 
   if (el === playerPanel) {
-    el.style.setProperty('--cover-image', `url(${JSON.stringify(src)})`);
-    el.style.backgroundImage = fallback;
+    setPlayerCover(src);
     return;
   }
 
-  el.style.backgroundImage = `url(${JSON.stringify(src)}), ${fallback}`;
+  el.style.backgroundImage = `url(${JSON.stringify(src)}), ${COVER_FALLBACK}`;
+}
+
+// The big player cover loads the crisp maxres thumbnail when available,
+// showing the mqdefault immediately and upgrading once maxres confirms it
+// exists (YouTube returns a 120px stub for videos without maxres).
+let coverProbeToken = 0;
+function setPlayerCover(src) {
+  playerPanel.style.backgroundImage = COVER_FALLBACK;
+  const setVar = (url) => playerPanel.style.setProperty('--cover-image', `url(${JSON.stringify(url)})`);
+  setVar(src);
+  const maxres = upgradeToMaxres(src);
+  if (maxres === src) return;
+  const token = ++coverProbeToken;
+  const probe = new Image();
+  probe.onload = () => {
+    if (token === coverProbeToken && probe.naturalWidth > 200) setVar(maxres);
+  };
+  probe.onerror = () => {};
+  probe.src = maxres;
+}
+
+function upgradeToMaxres(src) {
+  return String(src || '').replace(/\/(?:default|mqdefault|hqdefault|sddefault)\.jpg(\?.*)?$/i, '/maxresdefault.jpg$1');
 }
 
 function extractVideoId(url) {

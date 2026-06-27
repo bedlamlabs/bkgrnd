@@ -59,51 +59,58 @@ button {
 }
 
 .play-cover {
-  height: 252px;
   position: relative;
   isolation: isolate;
   --cover-image: none;
-  background: linear-gradient(135deg, rgba(46, 56, 65, 0.95), rgba(12, 14, 18, 0.98)), #14161a;
+  background: var(--popover-strong);
 }
 
+/* blurred ambient backdrop behind the whole panel (incl. meta strip) */
 .play-cover::before {
   content: "";
   position: absolute;
-  inset: -24px;
+  inset: 0;
   z-index: 0;
   background-image: var(--cover-image);
   background-size: cover;
   background-position: center;
-  opacity: 0.62;
-  filter: blur(22px) saturate(115%);
-  transform: scale(1.05);
+  opacity: 0.34;
+  filter: blur(34px) saturate(120%) brightness(0.7);
+  transform: scale(1.2);
 }
 
-.play-cover::after {
+/* 16:9 artwork sits on top; meta strip flows below it */
+.cover-stage {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+}
+
+.cover-art {
+  position: absolute;
+  inset: 0;
+  background-image: var(--cover-image);
+  background-size: cover;
+  background-position: center;
+  background-color: #14161a;
+}
+
+.cover-stage::after {
   content: "";
   position: absolute;
   inset: 0;
   z-index: 1;
   pointer-events: none;
-  background:
-    linear-gradient(180deg, rgba(0, 0, 0, 0.06) 0%, rgba(0, 0, 0, 0.12) 34%, rgba(0, 0, 0, 0.36) 66%, rgba(0, 0, 0, 0.68) 100%),
-    radial-gradient(circle at 50% 85%, rgba(0, 0, 0, 0.28), transparent 46%);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08), inset 0 -90px 100px rgba(0, 0, 0, 0.36);
-  border-radius: inherit;
+  background: linear-gradient(180deg, rgba(0, 0, 0, 0.34) 0%, rgba(0, 0, 0, 0.04) 26%, transparent 52%, rgba(0, 0, 0, 0.5) 100%);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
 }
 
-.cover-art {
-  position: absolute;
-  left: 0;
-  right: 0;
-  top: 0;
+.cover-meta {
+  position: relative;
   z-index: 1;
-  height: 190px;
-  background-image: var(--cover-image);
-  background-size: 100% auto;
-  background-position: center top;
-  background-repeat: no-repeat;
-  filter: drop-shadow(0 16px 34px rgba(0, 0, 0, 0.28));
+  padding: 11px 14px 13px;
 }
 
 .subtle-top {
@@ -111,7 +118,8 @@ button {
   inset: 14px 14px auto 14px;
   display: flex;
   align-items: center;
-  z-index: 2;
+  justify-content: space-between;
+  z-index: 4;
 }
 
 .micro-status {
@@ -162,28 +170,27 @@ button {
   position: absolute;
   left: 20px;
   right: 20px;
-  top: 14px;
+  bottom: 60px;
   z-index: 3;
 }
 
 .stream-title {
-  font-size: 15.6px;
+  font-size: 15px;
   line-height: 1.18;
-  font-weight: 780;
-  letter-spacing: 0;
+  font-weight: 700;
+  letter-spacing: -0.01em;
   text-shadow: 0 1px 10px rgba(0, 0, 0, 0.58);
   margin: 0;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
+  white-space: nowrap;
   overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .stream-subtitle {
-  margin-top: 5px;
-  color: rgba(255, 255, 255, 0.62);
-  font-size: 14.4px;
-  font-weight: 650;
+  margin-top: 3px;
+  color: rgba(255, 255, 255, 0.66);
+  font-size: 12px;
+  font-weight: 600;
   line-height: 1.2;
   text-shadow: 0 1px 10px rgba(0, 0, 0, 0.58);
   white-space: nowrap;
@@ -240,11 +247,20 @@ button {
   bottom: 15px;
   z-index: 3;
   display: grid;
-  grid-template-columns: 32px 32px 37.4px 32px 32px 32px;
+  grid-template-columns: 32px 32px 37.4px 32px 32px;
   gap: 8px;
   align-items: center;
   justify-content: center;
   height: 38px;
+  opacity: 0;
+  transform: translateY(6px);
+  transition: opacity 0.18s ease, transform 0.18s ease;
+}
+
+.play-cover:hover .cover-controls,
+.cover-controls:focus-within {
+  opacity: 1;
+  transform: none;
 }
 
 .control {
@@ -512,8 +528,8 @@ button {
 
 .stream-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
   min-height: 0;
   flex: 1;
   align-content: start;
@@ -539,53 +555,43 @@ button {
 
 .stream-tile {
   min-width: 0;
-  height: 112px;
-  border-radius: 12px;
-  overflow: hidden;
-  position: relative;
-  background:
-    linear-gradient(135deg, #28313a, #111318);
-  background-size: cover;
-  background-position: center;
+  background: transparent;
   border: 0;
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.045), 0 7px 15px rgba(0, 0, 0, 0.2);
-  color: var(--text);
   padding: 0;
   text-align: left;
+  color: var(--text);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
-.stream-tile::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(180deg, rgba(0, 0, 0, 0.03) 24%, rgba(0, 0, 0, 0.18) 54%, rgba(0, 0, 0, 0.76) 100%);
+.stream-thumb {
+  position: relative;
+  aspect-ratio: 16 / 9;
+  border-radius: 9px;
+  overflow: hidden;
+  background: linear-gradient(135deg, #28313a, #111318);
+  background-size: cover;
+  background-position: center;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05), 0 6px 14px rgba(0, 0, 0, 0.22);
 }
 
-.stream-tile::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  border-radius: inherit;
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.035), inset 0 0 16px rgba(0, 0, 0, 0.22);
-}
-
-.stream-tile.active {
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.28), inset 0 0 16px rgba(0, 0, 0, 0.24), 0 7px 15px rgba(0, 0, 0, 0.22);
+.stream-tile.active .stream-thumb {
+  box-shadow: inset 0 0 0 2px var(--blue), 0 6px 14px rgba(0, 0, 0, 0.24);
 }
 
 .tile-bookmark {
   position: absolute;
-  top: 8px;
-  left: 8px;
-  width: 24px;
-  height: 24px;
+  top: 6px;
+  left: 6px;
+  width: 22px;
+  height: 22px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   border-radius: 999px;
   color: rgba(255, 255, 255, 0.82);
-  background: rgba(0, 0, 0, 0.22);
+  background: rgba(0, 0, 0, 0.32);
   border: 0;
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
   backdrop-filter: blur(10px);
@@ -594,52 +600,37 @@ button {
 }
 
 .tile-bookmark svg {
-  width: 13px;
-  height: 13px;
+  width: 12px;
+  height: 12px;
 }
 
 .tile-meta {
   position: absolute;
-  top: 8px;
-  right: 8px;
+  top: 6px;
+  right: 6px;
+  height: 20px;
+  min-width: 0;
+  font-size: 9.5px;
   z-index: 2;
 }
 
-.tile-copy {
-  position: absolute;
-  left: 10px;
-  right: 10px;
-  bottom: 11px;
-  z-index: 1;
-}
-
-.tile-title {
-  display: -webkit-box;
-  color: inherit;
-  font-size: 12px;
-  font-weight: 780;
-  line-height: 1.18;
-  letter-spacing: 0;
-  text-shadow: 0 1px 12px rgba(0, 0, 0, 0.5);
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-  cursor: alias;
-}
-
-.tile-title:hover,
-.tile-title:focus-visible {
-  text-decoration: underline;
-  text-underline-offset: 2px;
-}
-
-.tile-sub {
-  margin-top: 4px;
-  font-size: 10.5px;
-  color: rgba(255, 255, 255, 0.64);
+.tile-ch {
+  font-size: 11px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.78);
+  line-height: 1.2;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  cursor: alias;
+  align-self: flex-start;
+  max-width: 100%;
+}
+
+.tile-ch:hover,
+.tile-ch:focus-visible {
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 
 .empty-grid {
