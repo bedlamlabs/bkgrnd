@@ -8,7 +8,9 @@ struct NowPlayingView: View {
   @EnvironmentObject var appModel: AppModel
   @Environment(\.dismiss) private var dismiss
 
-  private var isLocal: Bool { appModel.nowPlaying != nil }
+  // Scope-driven like the mini player: the stage controls whichever player
+  // the active scope refers to.
+  private var isLocal: Bool { appModel.scope == .recent && appModel.nowPlaying != nil }
 
   private var title: String {
     if isLocal { return appModel.nowPlaying?.title ?? "" }

@@ -5,8 +5,10 @@ import SwiftUI
 struct MiniPlayerBar: View {
   @EnvironmentObject var appModel: AppModel
 
-  private var isLocal: Bool { appModel.nowPlaying != nil }
-  private var showRemote: Bool { !isLocal && appModel.remoteIsPlaying }
+  // The ribbon follows the selected scope (PWA parity): Recent shows this
+  // phone's playback, Remote shows the Mac's — never the other way around.
+  private var isLocal: Bool { appModel.scope == .recent && appModel.nowPlaying != nil }
+  private var showRemote: Bool { appModel.scope == .remote && appModel.remoteIsPlaying }
 
   private var title: String {
     if isLocal { return appModel.nowPlaying?.title ?? "" }
