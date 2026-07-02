@@ -19,6 +19,11 @@ pub struct BkgrndConfig {
     pub spotify_access_token: Option<String>,
     #[serde(default)]
     pub spotify_max_tracks: Option<usize>,
+    // Absolute path to a yt-dlp binary to prefer over the bundled sidecar.
+    // The sidecar is a PyInstaller onefile build that costs ~7s of self-
+    // extraction per invocation; a native install starts in ~0.3s.
+    #[serde(default)]
+    pub ytdlp_bin: Option<String>,
 }
 
 fn data_dir() -> PathBuf {

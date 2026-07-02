@@ -1,5 +1,59 @@
+use std::path::PathBuf;
+use std::sync::OnceLock;
 use tauri::AppHandle;
-use tauri_plugin_shell::ShellExt;
+use tokio::process::Command;
+
+use crate::config;
+
+// Prefer a native yt-dlp install over the bundled sidecar: the sidecar is a
+// PyInstaller onefile binary that spends ~7s self-extracting on EVERY
+// invocation, while a native install starts in ~0.3s. The sidecar remains the
+// zero-setup fallback.
+fn ytdlp_binary() -> &'static PathBuf {
+    static BIN: OnceLock<PathBuf> = OnceLock::new();
+    BIN.get_or_init(|| {
+        let cfg = config::load_config();
+        if let Some(bin) = config::setting("BKGRND_YTDLP_BIN", cfg.ytdlp_bin.as_deref()) {
+            let path = PathBuf::from(&bin);
+            if path.is_file() {
+                return path;
+            }
+            eprintln!("[ytdlp] configured ytdlp_bin {:?} not found; falling back", bin);
+        }
+
+        let mut candidates: Vec<PathBuf> = vec![
+            PathBuf::from("/opt/homebrew/bin/yt-dlp"),
+            PathBuf::from("/usr/local/bin/yt-dlp"),
+        ];
+        if let Some(home) = dirs::home_dir() {
+            candidates.push(home.join(".local/bin/yt-dlp"));
+        }
+        for candidate in candidates {
+            if candidate.is_file() {
+                eprintln!("[ytdlp] using native binary {:?}", candidate);
+                return candidate;
+            }
+        }
+
+        // Bundled sidecar sits next to the app executable (Contents/MacOS).
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(dir) = exe.parent() {
+                let sidecar = dir.join("yt-dlp");
+                if sidecar.is_file() {
+                    eprintln!("[ytdlp] using bundled sidecar (slow startup; install yt-dlp via homebrew for faster resolves)");
+                    return sidecar;
+                }
+            }
+        }
+        PathBuf::from("yt-dlp")
+    })
+}
+
+fn ytdlp_command(args: &[&str]) -> Command {
+    let mut cmd = Command::new(ytdlp_binary());
+    cmd.args(args);
+    cmd
+}
 
 pub fn extract_video_id(url_str: &str) -> String {
     if let Ok(parsed) = url::Url::parse(url_str) {
@@ -76,7 +130,7 @@ fn js_runtime_arg() -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
-pub async fn extract_stream_url(app: &AppHandle, url: &str) -> Result<String, String> {
+pub async fn extract_stream_url(_app: &AppHandle, url: &str) -> Result<String, String> {
     let format = "bestaudio[ext=m4a]/bestaudio[acodec^=mp4a]/bestaudio/best";
     eprintln!("[ytdlp] Resolving stream for {}", url);
     let js = js_runtime_arg();
@@ -93,7 +147,7 @@ pub async fn extract_stream_url(app: &AppHandle, url: &str) -> Result<String, St
         }
         args.push(url);
 
-        let output = ytdlp_sidecar(app, &args)?.output().await.map_err(|e| {
+        let output = ytdlp_command(&args).output().await.map_err(|e| {
             eprintln!("[ytdlp] Spawn failed: {}", e);
             format!("yt-dlp spawn failed: {}", e)
         })?;
@@ -124,7 +178,7 @@ pub struct StreamInfo {
     pub duration: Option<f64>,
 }
 
-pub async fn resolve_stream_info(app: &AppHandle, url: &str) -> Result<StreamInfo, String> {
+pub async fn resolve_stream_info(_app: &AppHandle, url: &str) -> Result<StreamInfo, String> {
     let format = "bestaudio[ext=m4a]/bestaudio[acodec^=mp4a]/bestaudio/best";
     let js = js_runtime_arg();
     eprintln!("[ytdlp] Resolving metadata + stream for {}", url);
@@ -149,7 +203,7 @@ pub async fn resolve_stream_info(app: &AppHandle, url: &str) -> Result<StreamInf
         }
         args.push(url);
 
-        let output = ytdlp_sidecar(app, &args)?.output().await.map_err(|e| {
+        let output = ytdlp_command(&args).output().await.map_err(|e| {
             eprintln!("[ytdlp] Spawn failed: {}", e);
             format!("yt-dlp spawn failed: {}", e)
         })?;
@@ -223,17 +277,83 @@ fn parse_duration(value: &str) -> Option<f64> {
         .filter(|duration| *duration > 0.0)
 }
 
-fn ytdlp_sidecar(
-    app: &AppHandle,
-    args: &[&str],
-) -> Result<tauri_plugin_shell::process::Command, String> {
-    app.shell()
-        .sidecar("yt-dlp")
-        .map_err(|e| {
-            eprintln!("[ytdlp] Sidecar creation failed: {}", e);
-            format!("Failed to create yt-dlp sidecar: {}", e)
-        })
-        .map(|cmd| cmd.args(args))
+/// Search YouTube and resolve the first hit's stream URL in a single yt-dlp
+/// invocation. One process instead of two (search, then resolve) — this is
+/// the hot path for starting Spotify conversions.
+#[derive(Debug)]
+pub struct ResolvedTrack {
+    pub stream_url: String,
+    pub url: String,
+    pub video_id: String,
+    pub duration: Option<f64>,
+}
+
+pub async fn search_resolve_first(
+    _app: &AppHandle,
+    query: &str,
+) -> Result<Option<ResolvedTrack>, String> {
+    let format = "bestaudio[ext=m4a]/bestaudio[acodec^=mp4a]/bestaudio/best";
+    let search_arg = format!("ytsearch1:{}", query);
+    let js = js_runtime_arg();
+
+    for fast in [true, false] {
+        let mut args: Vec<&str> = vec![
+            "-f", format, "--no-playlist",
+            "--print", "%(id)s",
+            "--print", "%(duration)s",
+            "--get-url",
+        ];
+        if fast {
+            args.push("--extractor-args");
+            args.push(FAST_PLAYER_CLIENT);
+        }
+        if let Some(value) = js.as_deref() {
+            args.push("--js-runtimes");
+            args.push(value);
+        }
+        args.push(&search_arg);
+
+        let output = ytdlp_command(&args)
+            .output()
+            .await
+            .map_err(|e| format!("yt-dlp spawn failed: {}", e))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if fast {
+                eprintln!("[ytdlp] fast client search-resolve failed, falling back");
+                continue;
+            }
+            return Err(user_facing_ytdlp_error(&stderr));
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let mut lines = stdout.lines().filter(|line| !line.trim().is_empty());
+        let Some(video_id) = lines.next().map(str::trim).filter(|id| !id.is_empty()) else {
+            return Ok(None); // no search results
+        };
+        let duration = lines.next().and_then(parse_duration);
+        let stream_url = lines
+            .find(|line| line.starts_with("http://") || line.starts_with("https://"))
+            .map(str::trim)
+            .unwrap_or("")
+            .to_string();
+        if stream_url.is_empty() {
+            if fast {
+                continue;
+            }
+            return Ok(None);
+        }
+
+        return Ok(Some(ResolvedTrack {
+            stream_url,
+            url: format!("https://www.youtube.com/watch?v={}", video_id),
+            video_id: video_id.to_string(),
+            duration,
+        }));
+    }
+
+    Ok(None)
 }
 
 fn user_facing_ytdlp_error(stderr: &str) -> String {
@@ -289,7 +409,7 @@ pub struct SearchResult {
     pub track_count: Option<u64>,
 }
 
-pub async fn search_music(app: &AppHandle, query: &str) -> Result<Vec<SearchResult>, String> {
+pub async fn search_music(_app: &AppHandle, query: &str) -> Result<Vec<SearchResult>, String> {
     let lower = query.to_lowercase();
     let is_playlist_search = lower.contains("playlist");
 
@@ -308,11 +428,7 @@ pub async fn search_music(app: &AppHandle, query: &str) -> Result<Vec<SearchResu
         format!("ytsearch10:{} music", query)
     };
 
-    let output = app
-        .shell()
-        .sidecar("yt-dlp")
-        .map_err(|e| format!("Failed to create yt-dlp sidecar: {}", e))?
-        .args(["--flat-playlist", "--dump-json", &search_arg])
+    let output = ytdlp_command(&["--flat-playlist", "--dump-json", &search_arg])
         .output()
         .await
         .map_err(|e| format!("yt-dlp search failed: {}", e))?;
@@ -380,16 +496,12 @@ pub async fn search_music(app: &AppHandle, query: &str) -> Result<Vec<SearchResu
 }
 
 pub async fn search_first_music(
-    app: &AppHandle,
+    _app: &AppHandle,
     query: &str,
 ) -> Result<Option<SearchResult>, String> {
     let search_arg = format!("ytsearch1:{} music", query);
 
-    let output = app
-        .shell()
-        .sidecar("yt-dlp")
-        .map_err(|e| format!("Failed to create yt-dlp sidecar: {}", e))?
-        .args(["--flat-playlist", "--dump-json", &search_arg])
+    let output = ytdlp_command(&["--flat-playlist", "--dump-json", &search_arg])
         .output()
         .await
         .map_err(|e| format!("yt-dlp search failed: {}", e))?;
@@ -421,12 +533,8 @@ pub async fn search_first_music(
     }))
 }
 
-pub async fn enumerate_playlist(app: &AppHandle, url: &str) -> Result<PlaylistResult, String> {
-    let output = app
-        .shell()
-        .sidecar("yt-dlp")
-        .map_err(|e| format!("Failed to create yt-dlp sidecar: {}", e))?
-        .args(["--flat-playlist", "--dump-json", url])
+pub async fn enumerate_playlist(_app: &AppHandle, url: &str) -> Result<PlaylistResult, String> {
+    let output = ytdlp_command(&["--flat-playlist", "--dump-json", url])
         .output()
         .await
         .map_err(|e| format!("yt-dlp enumerate failed: {}", e))?;

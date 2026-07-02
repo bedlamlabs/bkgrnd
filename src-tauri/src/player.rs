@@ -192,11 +192,21 @@ async fn play_spotify(
 
     let mut tracks = source.tracks.into_iter().take(limit);
 
-    let mut first_item: Option<PlaylistItem> = None;
+    // First track: search + stream-resolve in ONE yt-dlp invocation so audio
+    // starts as fast as possible; the queue fills behind it.
+    let mut first: Option<(PlaylistItem, String)> = None;
     for track in tracks.by_ref() {
-        match ytdlp::search_first_music(&app, &track.search_query()).await {
-            Ok(Some(result)) => {
-                first_item = Some(queue_item_from_search(&track, result));
+        match ytdlp::search_resolve_first(&app, &track.search_query()).await {
+            Ok(Some(resolved)) => {
+                let item = PlaylistItem {
+                    url: resolved.url,
+                    video_id: resolved.video_id.clone(),
+                    title: track.display_title(),
+                    thumbnail: ytdlp::thumbnail_url(&resolved.video_id),
+                    channel: track.artist(),
+                    duration: resolved.duration,
+                };
+                first = Some((item, resolved.stream_url));
                 break;
             }
             Ok(None) => continue,
@@ -210,7 +220,7 @@ async fn play_spotify(
             }
         }
     }
-    let Some(first_item) = first_item else {
+    let Some((first_item, first_stream_url)) = first else {
         return Err("Could not find YouTube matches for this Spotify URL.".to_string());
     };
 
@@ -231,12 +241,16 @@ async fn play_spotify(
     let epoch = {
         let mut s = state.lock().await;
         s.queue_epoch += 1;
-        s.queue = vec![first_item];
+        s.queue = vec![first_item.clone()];
+        s.queue_index = 0;
         s.playlist_title = title;
         s.queue_epoch
     };
 
-    play_queue_item(0, app.clone(), state.clone()).await?;
+    // Stream URL is already resolved; spawn mpv directly instead of going
+    // through play_queue_item (which would re-resolve it).
+    let session = mpv::spawn_mpv(&app, &first_stream_url, &first_item.title, &first_item.url).await?;
+    install_session(&app, &state, session, first_item.title.clone()).await;
 
     let remaining: Vec<spotify::TrackMeta> = tracks.collect();
     if !remaining.is_empty() {

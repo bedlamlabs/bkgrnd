@@ -469,8 +469,20 @@ async function playRemote(item) {
 
 // Spotify URLs can't be resolved by yt-dlp; the server converts them into a
 // YouTube-backed queue which we then play with client-side auto-advance.
+// Two-phase: convert just the first track so audio starts in seconds, then
+// swap in the full queue when the complete conversion lands.
+let spotifyConversionToken = 0;
+
+async function fetchSpotifyQueue(sourceUrl, maxTracks) {
+  const url = new URL("api/v1/spotify/queue", apiBaseHref());
+  url.searchParams.set("url", sourceUrl);
+  if (maxTracks) url.searchParams.set("max_tracks", String(maxTracks));
+  return fetch(withToken(url.toString()), { cache: "no-store" });
+}
+
 async function playSpotifyRemote(item) {
   const playToken = ++remotePlayToken;
+  const conversionToken = ++spotifyConversionToken;
   remoteNow = item;
   activeSourceItem = item;
   activeResolveMeta = null;
@@ -481,9 +493,7 @@ async function playSpotifyRemote(item) {
 
   let body;
   try {
-    const url = new URL("api/v1/spotify/queue", apiBaseHref());
-    url.searchParams.set("url", item.url);
-    const resp = await fetch(withToken(url.toString()), { cache: "no-store" });
+    const resp = await fetchSpotifyQueue(item.url, 1);
     if (playToken !== remotePlayToken) return;
     if (!resp.ok) {
       const text = (await resp.text()).trim();
@@ -501,16 +511,33 @@ async function playSpotifyRemote(item) {
   }
 
   if (playToken !== remotePlayToken) return;
-  const items = Array.isArray(body?.items) ? body.items.map(normalizeItem) : [];
-  if (!items.length) {
+  const firstItems = Array.isArray(body?.items) ? body.items.map(normalizeItem) : [];
+  if (!firstItems.length) {
     stopAcquisitionStatus();
     setPlayerStatus("no matches");
     return;
   }
 
-  remoteQueue = items;
+  remoteQueue = firstItems;
   remoteQueueIndex = 0;
-  await playRemoteTrack(items[0]);
+  const firstPlay = playRemoteTrack(firstItems[0]);
+
+  // Phase 2: full conversion in the background; extend the queue in place
+  // unless the user has started a different conversion meanwhile.
+  fetchSpotifyQueue(item.url)
+    .then((resp) => (resp.ok ? resp.json() : null))
+    .then((full) => {
+      if (conversionToken !== spotifyConversionToken) return;
+      const items = Array.isArray(full?.items) ? full.items.map(normalizeItem) : [];
+      if (items.length <= remoteQueue.length) return;
+      const currentUrl = remoteQueue[remoteQueueIndex]?.url;
+      const currentIndex = items.findIndex((entry) => entry.url === currentUrl);
+      remoteQueue = items;
+      remoteQueueIndex = currentIndex >= 0 ? currentIndex : 0;
+    })
+    .catch(() => {});
+
+  await firstPlay;
 }
 
 function advanceRemoteQueue(step) {
