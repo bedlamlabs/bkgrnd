@@ -1,171 +1,143 @@
 import SwiftUI
 
+/// Browse surface per the final direction: wordmark header, segmented
+/// Recent/Remote scope, search row, card grid, mini player. The Marquee
+/// stage presents as a full-screen cover.
 struct RootView: View {
   @EnvironmentObject var appModel: AppModel
+  @State private var showSettings = false
+  @State private var showSearch = false
 
   var body: some View {
-    TabView {
-      RecentView()
-        .tabItem {
-          Image(systemName: "square.grid.2x2")
-          Text("Recent")
-        }
+    ZStack(alignment: .bottom) {
+      Theme.bg.ignoresSafeArea()
 
-      RemoteView()
-        .tabItem {
-          Image(systemName: "macbook")
-          Text("Remote")
+      ScrollView {
+        VStack(alignment: .leading, spacing: 0) {
+          header
+          scopeSegment
+          searchRow
+          if appModel.scope == .remote && appModel.remoteStatus?.online != true {
+            statusCard("Mac is unavailable. Open bkgrnd on the Mac to enable Remote.")
+          }
+          Text("Streams")
+            .font(.system(size: 16, weight: .bold))
+            .foregroundStyle(Theme.text)
+            .padding(.horizontal, 20)
+            .padding(.bottom, 10)
+          BrowseGrid()
+            .padding(.horizontal, 20)
+          if let err = appModel.lastSyncError {
+            statusCard("Offline — \(err)")
+              .padding(.top, 12)
+          }
+          Color.clear.frame(height: 110) // room for the mini player
         }
-
-      SearchView()
-        .tabItem {
-          Image(systemName: "magnifyingglass")
-          Text("Search")
-        }
-    }
-    .overlay(alignment: .bottom) {
-      if appModel.nowPlaying != nil {
-        MiniPlayerBar()
-          .padding(.horizontal, 12)
-          .padding(.bottom, 8)
       }
+      .refreshable {
+        await appModel.refreshPlaylists()
+        await appModel.refreshRemoteStatus()
+      }
+
+      MiniPlayerBar()
+        .padding(.horizontal, 12)
+        .padding(.bottom, 10)
     }
+    .preferredColorScheme(.dark)
+    .sheet(isPresented: $showSettings) { SettingsView() }
+    .sheet(isPresented: $showSearch) { SearchView() }
+    .fullScreenCover(isPresented: $appModel.showStage) { NowPlayingView() }
     .task {
       await appModel.refreshPlaylists()
       await appModel.refreshRemoteStatus()
     }
-  }
-}
-
-struct RemoteView: View {
-  @EnvironmentObject var appModel: AppModel
-  @State private var showSettings = false
-
-  private var status: WOPRClient.LocalPlayerStatus? {
-    appModel.remoteStatus?.status
-  }
-
-  var body: some View {
-    NavigationStack {
-      ZStack {
-        Color.black.ignoresSafeArea()
-
-        ScrollView {
-          VStack(alignment: .leading, spacing: 16) {
-            Text("REMOTE")
-              .font(.caption.weight(.semibold))
-              .foregroundStyle(.white.opacity(0.35))
-              .padding(.horizontal, 16)
-
-            VStack(alignment: .leading, spacing: 12) {
-              Text(appModel.remoteStatus?.online == true ? "Mac connected" : "Mac unavailable")
-                .font(.headline)
-                .foregroundStyle(.white.opacity(0.92))
-
-              if let status, status.isPlaying {
-                Text(status.title.isEmpty ? "Playing on Mac" : status.title)
-                  .font(.title3.weight(.semibold))
-                  .foregroundStyle(.white.opacity(0.9))
-                  .lineLimit(3)
-
-                Text(status.playlistTitle.isEmpty ? "Remote" : status.playlistTitle)
-                  .font(.subheadline)
-                  .foregroundStyle(.white.opacity(0.55))
-
-                HStack(spacing: 12) {
-                  Button {
-                    Task { await appModel.toggleRemotePause() }
-                  } label: {
-                    Label(status.isPaused ? "Play" : "Pause", systemImage: status.isPaused ? "play.fill" : "pause.fill")
-                  }
-
-                  Button(role: .destructive) {
-                    Task { await appModel.stopRemote() }
-                  } label: {
-                    Label("Stop", systemImage: "stop.fill")
-                  }
-                }
-                .buttonStyle(.bordered)
-              } else {
-                Text("Choose an item below to start playback on the Mac.")
-                  .font(.subheadline)
-                  .foregroundStyle(.white.opacity(0.55))
-              }
-
-              if let err = appModel.lastRemoteError {
-                Text(err)
-                  .font(.footnote)
-                  .foregroundStyle(.white.opacity(0.45))
-              }
-            }
-            .padding(16)
-            .background(.white.opacity(0.05))
-            .overlay(
-              RoundedRectangle(cornerRadius: 16)
-                .stroke(.white.opacity(0.10), lineWidth: 1)
-            )
-            .clipShape(RoundedRectangle(cornerRadius: 16))
-            .padding(.horizontal, 16)
-
-            VStack(spacing: 10) {
-              ForEach((appModel.recentPlaylist?.items ?? []), id: \.id) { item in
-                Button {
-                  Task { await appModel.playRemote(item) }
-                } label: {
-                  HStack(spacing: 10) {
-                    AsyncImage(url: URL(string: item.thumbnail ?? "")) { phase in
-                      switch phase {
-                      case .success(let image):
-                        image.resizable().scaledToFill()
-                      default:
-                        Rectangle().fill(.white.opacity(0.06))
-                      }
-                    }
-                    .frame(width: 56, height: 42)
-                    .clipShape(RoundedRectangle(cornerRadius: 10))
-
-                    VStack(alignment: .leading, spacing: 3) {
-                      Text(item.title)
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.white.opacity(0.9))
-                        .lineLimit(2)
-                      Text(item.channel ?? "")
-                        .font(.caption)
-                        .foregroundStyle(.white.opacity(0.55))
-                        .lineLimit(1)
-                    }
-                    Spacer()
-                    Image(systemName: "play.fill")
-                      .foregroundStyle(.white.opacity(0.7))
-                  }
-                  .padding(10)
-                  .background(.white.opacity(0.05))
-                  .overlay(
-                    RoundedRectangle(cornerRadius: 16)
-                      .stroke(.white.opacity(0.10), lineWidth: 1)
-                  )
-                  .clipShape(RoundedRectangle(cornerRadius: 16))
-                }
-                .buttonStyle(.plain)
-              }
-            }
-            .padding(.horizontal, 16)
-          }
-          .padding(.vertical, 12)
-        }
-      }
-      .navigationTitle("Remote")
-      .toolbar {
-        ToolbarItem(placement: .topBarTrailing) {
-          Button { showSettings = true } label: {
-            Image(systemName: "gearshape")
-          }
-        }
-      }
-      .sheet(isPresented: $showSettings) { SettingsView() }
-      .refreshable {
+    .task {
+      // Poll the Mac's status so the Remote dot and mini player stay live.
+      while !Task.isCancelled {
+        try? await Task.sleep(nanoseconds: 3_000_000_000)
         await appModel.refreshRemoteStatus()
       }
     }
+  }
+
+  private var header: some View {
+    HStack {
+      (Text("b").foregroundStyle(Theme.coral) + Text("kgrnd").foregroundStyle(Theme.text))
+        .font(.system(size: 22, weight: .heavy))
+        .kerning(-0.5)
+      Spacer()
+      Button { showSettings = true } label: {
+        Image(systemName: "gearshape")
+          .font(.system(size: 14, weight: .semibold))
+          .foregroundStyle(Theme.muted)
+          .frame(width: 34, height: 34)
+          .background(Theme.card, in: Circle())
+          .overlay(Circle().stroke(Theme.stroke, lineWidth: 1))
+      }
+    }
+    .padding(.horizontal, 20)
+    .padding(.top, 6)
+    .padding(.bottom, 12)
+  }
+
+  private var scopeSegment: some View {
+    HStack(spacing: 0) {
+      ForEach(PlaybackScope.allCases, id: \.self) { scope in
+        Button {
+          appModel.scope = scope
+        } label: {
+          HStack(spacing: 6) {
+            Text(scope.rawValue)
+              .font(.system(size: 13, weight: .semibold))
+            if scope == .remote && appModel.remoteIsPlaying {
+              Circle().fill(Color(red: 0.5, green: 0.88, blue: 0.63)).frame(width: 6, height: 6)
+            }
+          }
+          .foregroundStyle(appModel.scope == scope ? Theme.text : Theme.muted)
+          .frame(maxWidth: .infinity)
+          .frame(height: 32)
+          .background(
+            appModel.scope == scope ? Color.white.opacity(0.10) : .clear,
+            in: RoundedRectangle(cornerRadius: 9)
+          )
+        }
+      }
+    }
+    .padding(3)
+    .background(Theme.card, in: RoundedRectangle(cornerRadius: 12))
+    .overlay(RoundedRectangle(cornerRadius: 12).stroke(Theme.stroke, lineWidth: 1))
+    .padding(.horizontal, 20)
+    .padding(.bottom, 14)
+  }
+
+  private var searchRow: some View {
+    Button { showSearch = true } label: {
+      HStack(spacing: 9) {
+        Image(systemName: "magnifyingglass")
+          .font(.system(size: 13, weight: .medium))
+        Text("Search, or paste a YouTube / Spotify URL")
+          .font(.system(size: 13.5, weight: .medium))
+        Spacer()
+      }
+      .foregroundStyle(Theme.muted2)
+      .padding(.horizontal, 13)
+      .frame(height: 40)
+      .background(Theme.card, in: RoundedRectangle(cornerRadius: 12))
+      .overlay(RoundedRectangle(cornerRadius: 12).stroke(Theme.stroke, lineWidth: 1))
+    }
+    .padding(.horizontal, 20)
+    .padding(.bottom, 18)
+  }
+
+  private func statusCard(_ message: String) -> some View {
+    Text(message)
+      .font(.system(size: 12.5))
+      .foregroundStyle(Theme.muted)
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .padding(12)
+      .background(Theme.card, in: RoundedRectangle(cornerRadius: 12))
+      .overlay(RoundedRectangle(cornerRadius: 12).stroke(Theme.stroke, lineWidth: 1))
+      .padding(.horizontal, 20)
+      .padding(.bottom, 14)
   }
 }

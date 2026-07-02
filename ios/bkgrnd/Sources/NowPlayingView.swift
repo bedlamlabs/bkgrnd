@@ -1,149 +1,336 @@
 import AVKit
 import SwiftUI
 
+/// The "Marquee" stage: artwork dissolves into a blurred fill of itself,
+/// serif display type, brass accent. Dual-mode — controls this phone's
+/// player, or the Mac when playback is remote.
 struct NowPlayingView: View {
   @EnvironmentObject var appModel: AppModel
+  @Environment(\.dismiss) private var dismiss
 
-  private var accent: Color { Color(red: 0.79, green: 0.36, blue: 0.36) }
+  private var isLocal: Bool { appModel.nowPlaying != nil }
+
+  private var title: String {
+    if isLocal { return appModel.nowPlaying?.title ?? "" }
+    return appModel.remotePlayerStatus?.title ?? "Nothing playing"
+  }
+
+  private var subtitle: String {
+    if isLocal { return appModel.nowPlaying?.channel ?? "" }
+    let s = appModel.remotePlayerStatus
+    return (s?.playlistTitle.isEmpty == false ? s?.playlistTitle : nil) ?? "On the Mac"
+  }
+
+  private var artURL: String? {
+    if isLocal { return appModel.nowPlaying?.thumbnail }
+    let thumb = appModel.remotePlayerStatus?.thumbnail
+    return (thumb?.isEmpty == false) ? thumb : nil
+  }
+
+  private var kicker: String {
+    if !isLocal { return "Playing on the Mac" }
+    if appModel.queue.count > 1 {
+      let name = appModel.queueTitle.isEmpty ? "" : " — \(appModel.queueTitle)"
+      return "No. \(appModel.queueIndex + 1) of \(appModel.queue.count)\(name)"
+    }
+    return appModel.nowPlaying?.isLive == true ? "Live stream" : ""
+  }
+
+  private var statusLabel: String {
+    if !appModel.statusMessage.isEmpty { return appModel.statusMessage }
+    if isLocal { return appModel.audioPlayer.isPlaying ? "streaming" : "paused" }
+    return appModel.remotePlayerStatus?.isPaused == true ? "paused" : "streaming"
+  }
+
+  private var position: Double {
+    isLocal ? appModel.audioPlayer.currentTime : (appModel.remotePlayerStatus?.position ?? 0)
+  }
+
+  private var duration: Double {
+    isLocal ? appModel.audioPlayer.duration : (appModel.remotePlayerStatus?.duration ?? 0)
+  }
+
+  private var isPaused: Bool {
+    isLocal ? !appModel.audioPlayer.isPlaying : (appModel.remotePlayerStatus?.isPaused ?? false)
+  }
 
   var body: some View {
-    NavigationStack {
-      ZStack {
-        Color.black.ignoresSafeArea()
+    ZStack {
+      StageBackdrop(artURL: artURL)
 
-        VStack(spacing: 14) {
-          AsyncImage(url: URL(string: appModel.nowPlaying?.thumbnail ?? "")) { phase in
-            switch phase {
-            case .success(let image):
-              image.resizable().scaledToFill()
-            default:
-              Rectangle().fill(.white.opacity(0.06))
-            }
-          }
-          .frame(height: 260)
-          .clipShape(RoundedRectangle(cornerRadius: 22))
-          .padding(.horizontal, 16)
-          .onTapGesture {
-            // Implicit: tap artwork opens source
-            if let s = appModel.nowPlaying?.url, let url = URL(string: s) {
-              UIApplication.shared.open(url)
-            }
-          }
-
-          Text("Tap artwork to open source")
-            .font(.footnote)
-            .foregroundStyle(.white.opacity(0.45))
-
-          Text(appModel.nowPlaying?.title ?? "")
-            .font(.title3.weight(.semibold))
-            .foregroundStyle(.white.opacity(0.92))
-            .multilineTextAlignment(.center)
-            .lineLimit(3)
-            .padding(.horizontal, 18)
-
-          Text(appModel.nowPlaying?.channel ?? "")
-            .font(.subheadline)
-            .foregroundStyle(.white.opacity(0.55))
-
-          VStack(spacing: 10) {
-            Slider(
-              value: Binding(
-                get: { appModel.audioPlayer.currentTime },
-                set: { appModel.audioPlayer.seek(to: $0) }
-              ),
-              in: 0...(max(appModel.audioPlayer.duration, 1))
-            )
-            .tint(accent)
-            .padding(.horizontal, 18)
-
-            HStack {
-              Text(formatTime(appModel.audioPlayer.currentTime))
-              Spacer()
-              Text(formatTime(appModel.audioPlayer.duration))
-            }
-            .font(.caption)
-            .foregroundStyle(.white.opacity(0.45))
-            .padding(.horizontal, 18)
-          }
-
-          HStack(spacing: 14) {
-            CircleButton(icon: "gobackward.15", filled: false, accent: accent) {
-              appModel.audioPlayer.seek(to: max(appModel.audioPlayer.currentTime - 15, 0))
-            }
-            CircleButton(icon: "backward.fill", filled: false, accent: accent) {}
-            CircleButton(icon: appModel.audioPlayer.isPlaying ? "pause.fill" : "play.fill", filled: true, accent: accent) {
-              appModel.audioPlayer.togglePlayPause()
-            }
-            CircleButton(icon: "forward.fill", filled: false, accent: accent) {}
-            CircleButton(icon: "goforward.15", filled: false, accent: accent) {
-              appModel.audioPlayer.seek(to: appModel.audioPlayer.currentTime + 15)
-            }
-          }
-          .padding(.top, 4)
-
-          HStack {
-            Image(systemName: "speaker.wave.2")
-              .foregroundStyle(.white.opacity(0.55))
-            Slider(value: .constant(0.6))
-              .tint(accent.opacity(0.55))
-            AirPlayRoutePicker()
-              .frame(width: 44, height: 32)
-          }
-          .padding(.horizontal, 16)
-          .padding(.top, 6)
-
-          Spacer(minLength: 8)
-        }
-        .padding(.top, 10)
+      VStack(spacing: 0) {
+        topRow
+        Spacer()
+        copyBlock
+        progressBlock
+        controlsRow
       }
-      .navigationTitle("Now Playing")
-      .toolbar {
-        ToolbarItem(placement: .topBarTrailing) {
-          Button {
-            // placeholder menu
-          } label: {
-            Image(systemName: "ellipsis")
-          }
+      .padding(.horizontal, 26)
+      .padding(.top, 16)
+      .padding(.bottom, 24)
+    }
+    .preferredColorScheme(.dark)
+  }
+
+  private var topRow: some View {
+    HStack {
+      chip {
+        HStack(spacing: 6) {
+          Circle().fill(Color(red: 0.6, green: 0.91, blue: 0.68)).frame(width: 5, height: 5)
+          Text(statusLabel.uppercased())
         }
+      }
+      Spacer()
+      if isLocal && appModel.queue.count > 1 {
+        chip { Text("QUEUE · \(appModel.queue.count)") }
+      }
+      if let urlString = isLocal ? appModel.nowPlaying?.url : appModel.remotePlayerStatus?.sourceUrl,
+         let url = URL(string: urlString) {
+        ShareLink(item: url) {
+          ghostIcon("square.and.arrow.up")
+        }
+      }
+      Button { dismiss() } label: {
+        ghostIcon("square.grid.2x2")
       }
     }
   }
 
-  private func formatTime(_ t: Double) -> String {
-    if !t.isFinite || t < 0 { return "0:00" }
-    let s = Int(t)
-    let m = s / 60
-    let r = s % 60
-    return "\(m):" + String(format: "%02d", r)
+  private var copyBlock: some View {
+    VStack(alignment: .leading, spacing: 10) {
+      Text(kicker)
+        .font(.system(size: 15, design: .serif))
+        .italic()
+        .foregroundStyle(Theme.brass)
+        .frame(minHeight: 19, alignment: .leading)
+      Text(title)
+        .font(.system(size: 34, weight: .medium, design: .serif))
+        .foregroundStyle(Theme.text)
+        .lineLimit(3)
+        .minimumScaleFactor(0.7)
+        .shadow(color: .black.opacity(0.6), radius: 17, y: 4)
+      Text(subtitle.uppercased())
+        .font(.system(size: 12, weight: .bold))
+        .kerning(1.9)
+        .foregroundStyle(Color.white.opacity(0.62))
+        .lineLimit(1)
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
+  }
+
+  private var progressBlock: some View {
+    VStack(spacing: 6) {
+      StageRail(
+        position: position,
+        duration: duration,
+        onSeek: isLocal ? { appModel.audioPlayer.seek(to: $0) } : nil
+      )
+      HStack {
+        Text(formatClock(position))
+        Spacer()
+        Text(duration > 0 ? formatClock(duration) : "--:--")
+      }
+      .font(.system(size: 11.5, weight: .semibold))
+      .monospacedDigit()
+      .foregroundStyle(Color.white.opacity(0.6))
+    }
+    .padding(.top, 26)
+  }
+
+  private var controlsRow: some View {
+    HStack {
+      Button {
+        if isLocal { appModel.stopLocal(); dismiss() }
+        else { Task { await appModel.stopRemote() } }
+      } label: {
+        Image(systemName: "stop.fill")
+          .font(.system(size: 17, weight: .semibold))
+          .foregroundStyle(Color(red: 1, green: 0.51, blue: 0.51).opacity(0.8))
+          .frame(width: 46, height: 46)
+      }
+
+      Spacer()
+
+      Button {
+        if isLocal { appModel.audioPlayer.skip(-15) }
+      } label: {
+        stageButton("gobackward.15")
+      }
+      .opacity(isLocal ? 1 : 0.3)
+      .disabled(!isLocal)
+
+      Spacer()
+
+      Button {
+        if isLocal { appModel.audioPlayer.togglePlayPause() }
+        else { Task { await appModel.toggleRemotePause() } }
+      } label: {
+        Image(systemName: isPaused ? "play.fill" : "pause.fill")
+          .font(.system(size: 26, weight: .bold))
+          .foregroundStyle(Color(red: 0.086, green: 0.075, blue: 0.102))
+          .frame(width: 72, height: 72)
+          .background(Theme.paper, in: Circle())
+          .shadow(color: .black.opacity(0.5), radius: 20, y: 8)
+      }
+
+      Spacer()
+
+      Button {
+        if isLocal { appModel.audioPlayer.skip(15) }
+      } label: {
+        stageButton("goforward.15")
+      }
+      .opacity(isLocal ? 1 : 0.3)
+      .disabled(!isLocal)
+
+      Spacer()
+
+      AirPlayRoutePicker()
+        .frame(width: 46, height: 46)
+        .opacity(isLocal ? 1 : 0.3)
+    }
+    .padding(.top, 22)
+  }
+
+  private func chip<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+    content()
+      .font(.system(size: 10, weight: .bold))
+      .kerning(1.4)
+      .foregroundStyle(Color.white.opacity(0.8))
+      .padding(.horizontal, 10)
+      .frame(height: 26)
+      .background(Color.black.opacity(0.3), in: Capsule())
+      .overlay(Capsule().stroke(Color.white.opacity(0.16), lineWidth: 1))
+  }
+
+  private func ghostIcon(_ systemName: String) -> some View {
+    Image(systemName: systemName)
+      .font(.system(size: 13, weight: .semibold))
+      .foregroundStyle(Color.white.opacity(0.75))
+      .frame(width: 32, height: 32)
+      .background(Color.black.opacity(0.28), in: Circle())
+      .overlay(Circle().stroke(Color.white.opacity(0.14), lineWidth: 1))
+  }
+
+  private func stageButton(_ systemName: String) -> some View {
+    Image(systemName: systemName)
+      .font(.system(size: 19, weight: .semibold))
+      .foregroundStyle(Color.white.opacity(0.88))
+      .frame(width: 46, height: 46)
+      .background(Color.white.opacity(0.05), in: Circle())
+      .overlay(Circle().stroke(Color.white.opacity(0.18), lineWidth: 1))
   }
 }
 
-private struct CircleButton: View {
-  let icon: String
-  let filled: Bool
-  let accent: Color
-  let action: () -> Void
+/// Blurred self-fill behind a sharp masked crop of the same art.
+private struct StageBackdrop: View {
+  let artURL: String?
 
   var body: some View {
-    Button(action: action) {
-      ZStack {
-        RoundedRectangle(cornerRadius: 14)
-          .fill(filled ? accent : .white.opacity(0.06))
-          .overlay(
-            RoundedRectangle(cornerRadius: 14)
-              .stroke(.white.opacity(0.12), lineWidth: 1)
-          )
-        Image(systemName: icon)
-          .foregroundStyle(filled ? .white : .white.opacity(0.8))
-          .font(.system(size: 16, weight: .semibold))
+    GeometryReader { proxy in
+      ZStack(alignment: .top) {
+        Color(red: 0.043, green: 0.039, blue: 0.047)
+
+        if let artURL {
+          StageArtImage(urlString: artURL) { image in
+            image.resizable().scaledToFill()
+              .frame(width: proxy.size.width, height: proxy.size.height)
+              .blur(radius: 52)
+              .saturation(1.5)
+              .brightness(-0.25)
+              .clipped()
+          }
+          StageArtImage(urlString: artURL) { image in
+            image.resizable().scaledToFill()
+              .frame(width: proxy.size.width, height: proxy.size.height * 0.62, alignment: .top)
+              .clipped()
+              .mask(
+                LinearGradient(
+                  stops: [.init(color: .black, location: 0.62), .init(color: .clear, location: 1)],
+                  startPoint: .top, endPoint: .bottom
+                )
+              )
+          }
+        } else {
+          Text("b")
+            .font(.system(size: 120, weight: .bold, design: .serif))
+            .foregroundStyle(Color.white.opacity(0.10))
+            .frame(width: proxy.size.width, height: proxy.size.height * 0.6)
+        }
+
+        LinearGradient(
+          stops: [
+            .init(color: Color(red: 0.03, green: 0.027, blue: 0.04).opacity(0.25), location: 0),
+            .init(color: .clear, location: 0.26),
+            .init(color: Color(red: 0.03, green: 0.027, blue: 0.04).opacity(0.42), location: 0.6),
+            .init(color: Color(red: 0.03, green: 0.027, blue: 0.04).opacity(0.94), location: 1),
+          ],
+          startPoint: .top, endPoint: .bottom
+        )
+        .frame(width: proxy.size.width, height: proxy.size.height)
       }
-      .frame(width: filled ? 64 : 44, height: 44)
     }
-    .buttonStyle(.plain)
+    .ignoresSafeArea()
   }
 }
 
-private struct AirPlayRoutePicker: UIViewRepresentable {
+/// Loads maxres art with graceful fallback to the original thumbnail.
+private struct StageArtImage<Content: View>: View {
+  let urlString: String
+  @ViewBuilder let content: (Image) -> Content
+  @State private var maxresFailed = false
+
+  var body: some View {
+    let target = maxresFailed ? urlString : urlString.maxresThumbnail
+    AsyncImage(url: URL(string: target)) { phase in
+      switch phase {
+      case .success(let image):
+        content(image)
+      case .failure:
+        Color.clear.onAppear {
+          if !maxresFailed { maxresFailed = true }
+        }
+      default:
+        Color.clear
+      }
+    }
+  }
+}
+
+/// Brass progress rail with optional drag-to-seek.
+private struct StageRail: View {
+  let position: Double
+  let duration: Double
+  let onSeek: ((Double) -> Void)?
+
+  var body: some View {
+    GeometryReader { proxy in
+      let fraction = duration > 0 ? min(max(position / duration, 0), 1) : 0
+      ZStack(alignment: .leading) {
+        Capsule().fill(Color.white.opacity(0.22)).frame(height: 3)
+        Capsule().fill(Theme.brass).frame(width: proxy.size.width * fraction, height: 3)
+        Circle()
+          .fill(Theme.brass)
+          .frame(width: 13, height: 13)
+          .background(Circle().fill(Theme.brass.opacity(0.22)).frame(width: 21, height: 21))
+          .offset(x: proxy.size.width * fraction - 6.5)
+      }
+      .frame(height: 23)
+      .contentShape(Rectangle())
+      .gesture(
+        DragGesture(minimumDistance: 0)
+          .onEnded { value in
+            guard let onSeek, duration > 0 else { return }
+            let fraction = min(max(value.location.x / proxy.size.width, 0), 1)
+            onSeek(duration * fraction)
+          }
+      )
+    }
+    .frame(height: 23)
+  }
+}
+
+struct AirPlayRoutePicker: UIViewRepresentable {
   func makeUIView(context: Context) -> AVRoutePickerView {
     let v = AVRoutePickerView()
     v.activeTintColor = UIColor.white
@@ -154,4 +341,3 @@ private struct AirPlayRoutePicker: UIViewRepresentable {
 
   func updateUIView(_ uiView: AVRoutePickerView, context: Context) {}
 }
-

@@ -92,6 +92,11 @@ struct PlaylistItem {
     thumbnail: String,
     #[serde(default)]
     added_at: String,
+    // Menubar app writes these; clients use them for duration/LIVE chips.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    duration: Option<f64>,
+    #[serde(default, rename = "type", skip_serializing_if = "Option::is_none")]
+    entry_type: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

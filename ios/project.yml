@@ -2,7 +2,7 @@ name: bkgrnd
 options:
   bundleIdPrefix: com.bedlamlabs
   deploymentTarget:
-    iOS: "16.0"
+    iOS: "17.0"
 targets:
   bkgrnd:
     type: application
@@ -13,6 +13,8 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.bedlamlabs.bkgrnd.ios
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: 45CY38F39L
         MARKETING_VERSION: "0.1.0"
         CURRENT_PROJECT_VERSION: "1"
         GENERATE_INFOPLIST_FILE: YES

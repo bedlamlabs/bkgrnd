@@ -8,8 +8,19 @@ final class AudioPlayer: ObservableObject {
   @Published private(set) var currentTime: Double = 0
   @Published private(set) var duration: Double = 0
 
+  /// Fires when the current item plays to its end — drives queue auto-advance.
+  var onItemEnded: (() -> Void)?
+  /// Fires on lock-screen/island prev-next taps.
+  var onSkipRequested: ((_ forward: Bool) -> Void)?
+
   private var player: AVPlayer?
   private var timeObserver: Any?
+  private var endObserver: NSObjectProtocol?
+  private var commandsConfigured = false
+
+  private var nowPlayingTitle = ""
+  private var nowPlayingArtist = ""
+  private var nowPlayingArtwork: MPMediaItemArtwork?
 
   func play(url: URL, headers: [String: String], title: String, artist: String, artworkURL: String?) async {
     configureAudioSession()
@@ -19,15 +30,16 @@ final class AudioPlayer: ObservableObject {
     let item = AVPlayerItem(asset: asset)
     let p = AVPlayer(playerItem: item)
 
-    if let timeObserver {
-      player?.removeTimeObserver(timeObserver)
-      self.timeObserver = nil
-    }
-
+    teardownObservers()
     player = p
+    currentTime = 0
+    duration = 0
+    nowPlayingTitle = title
+    nowPlayingArtist = artist
+    nowPlayingArtwork = nil
 
     timeObserver = p.addPeriodicTimeObserver(
-      forInterval: CMTime(seconds: 0.5, preferredTimescale: 600),
+      forInterval: CMTime(seconds: 1.0, preferredTimescale: 600),
       queue: DispatchQueue.main
     ) { [weak self, weak p] (t: CMTime) in
       Task { @MainActor in
@@ -36,14 +48,39 @@ final class AudioPlayer: ObservableObject {
         if let d = p?.currentItem?.duration.seconds, d.isFinite {
           self.duration = d
         }
+        // Keep the island/lock-screen scrubber honest.
+        self.pushNowPlayingInfo()
       }
     }
 
-    updateNowPlaying(title: title, artist: artist, elapsed: 0, duration: 0, isPlaying: true, artworkURL: artworkURL)
+    endObserver = NotificationCenter.default.addObserver(
+      forName: .AVPlayerItemDidPlayToEndTime,
+      object: item,
+      queue: .main
+    ) { [weak self] _ in
+      Task { @MainActor in
+        guard let self else { return }
+        self.isPlaying = false
+        self.onItemEnded?()
+      }
+    }
+
     setupRemoteCommands()
+    loadArtwork(artworkURL)
 
     p.play()
     isPlaying = true
+    pushNowPlayingInfo()
+  }
+
+  func stop() {
+    teardownObservers()
+    player?.pause()
+    player = nil
+    isPlaying = false
+    currentTime = 0
+    duration = 0
+    MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
   }
 
   func togglePlayPause() {
@@ -55,12 +92,29 @@ final class AudioPlayer: ObservableObject {
       p.play()
       isPlaying = true
     }
-    updatePlaybackState()
+    pushNowPlayingInfo()
   }
 
   func seek(to seconds: Double) {
     guard let p = player else { return }
-    p.seek(to: CMTime(seconds: seconds, preferredTimescale: 600))
+    p.seek(to: CMTime(seconds: max(seconds, 0), preferredTimescale: 600))
+    currentTime = max(seconds, 0)
+    pushNowPlayingInfo()
+  }
+
+  func skip(_ delta: Double) {
+    seek(to: currentTime + delta)
+  }
+
+  private func teardownObservers() {
+    if let timeObserver {
+      player?.removeTimeObserver(timeObserver)
+      self.timeObserver = nil
+    }
+    if let endObserver {
+      NotificationCenter.default.removeObserver(endObserver)
+      self.endObserver = nil
+    }
   }
 
   private func configureAudioSession() {
@@ -74,10 +128,20 @@ final class AudioPlayer: ObservableObject {
   }
 
   private func setupRemoteCommands() {
+    guard !commandsConfigured else { return }
+    commandsConfigured = true
+
     let center = MPRemoteCommandCenter.shared()
     center.playCommand.isEnabled = true
     center.pauseCommand.isEnabled = true
     center.togglePlayPauseCommand.isEnabled = true
+    center.skipBackwardCommand.isEnabled = true
+    center.skipForwardCommand.isEnabled = true
+    center.skipBackwardCommand.preferredIntervals = [15]
+    center.skipForwardCommand.preferredIntervals = [15]
+    center.changePlaybackPositionCommand.isEnabled = true
+    center.nextTrackCommand.isEnabled = true
+    center.previousTrackCommand.isEnabled = true
 
     center.playCommand.addTarget { [weak self] _ in
       guard let self else { return .commandFailed }
@@ -93,42 +157,63 @@ final class AudioPlayer: ObservableObject {
       self?.togglePlayPause()
       return .success
     }
-  }
-
-  private func updateNowPlaying(title: String, artist: String, elapsed: Double, duration: Double, isPlaying: Bool, artworkURL: String?) {
-    var info: [String: Any] = [
-      MPMediaItemPropertyTitle: title,
-      MPMediaItemPropertyArtist: artist,
-      MPNowPlayingInfoPropertyElapsedPlaybackTime: elapsed,
-      MPMediaItemPropertyPlaybackDuration: duration,
-      MPNowPlayingInfoPropertyPlaybackRate: isPlaying ? 1.0 : 0.0,
-    ]
-
-    if let artworkURL, let url = URL(string: artworkURL) {
-      Task.detached {
-        if let data = try? Data(contentsOf: url), let img = UIImage(data: data) {
-          let art = MPMediaItemArtwork(boundsSize: img.size) { _ in img }
-          await MainActor.run {
-            info[MPMediaItemPropertyArtwork] = art
-            MPNowPlayingInfoCenter.default().nowPlayingInfo = info
-          }
-        } else {
-          await MainActor.run {
-            MPNowPlayingInfoCenter.default().nowPlayingInfo = info
-          }
-        }
-      }
-    } else {
-      MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+    center.skipBackwardCommand.addTarget { [weak self] _ in
+      self?.skip(-15)
+      return .success
+    }
+    center.skipForwardCommand.addTarget { [weak self] _ in
+      self?.skip(15)
+      return .success
+    }
+    center.changePlaybackPositionCommand.addTarget { [weak self] event in
+      guard let self, let event = event as? MPChangePlaybackPositionCommandEvent else { return .commandFailed }
+      self.seek(to: event.positionTime)
+      return .success
+    }
+    center.nextTrackCommand.addTarget { [weak self] _ in
+      self?.onSkipRequested?(true)
+      return .success
+    }
+    center.previousTrackCommand.addTarget { [weak self] _ in
+      self?.onSkipRequested?(false)
+      return .success
     }
   }
 
-  private func updatePlaybackState() {
-    guard var info = MPNowPlayingInfoCenter.default().nowPlayingInfo else { return }
-    info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = currentTime
-    info[MPNowPlayingInfoPropertyPlaybackRate] = isPlaying ? 1.0 : 0.0
+  private func loadArtwork(_ artworkURL: String?) {
+    guard let artworkURL else { return }
+    // Prefer full-res art on the island/lock screen; fall back to what we have.
+    let candidates = [artworkURL.maxresThumbnail, artworkURL]
+    Task.detached {
+      for candidate in candidates {
+        guard let url = URL(string: candidate),
+              let (data, _) = try? await URLSession.shared.data(from: url),
+              let img = UIImage(data: data),
+              img.size.width > 200
+        else { continue }
+        let art = MPMediaItemArtwork(boundsSize: img.size) { _ in img }
+        await MainActor.run { [weak self] in
+          self?.nowPlayingArtwork = art
+          self?.pushNowPlayingInfo()
+        }
+        return
+      }
+    }
+  }
+
+  private func pushNowPlayingInfo() {
+    var info: [String: Any] = [
+      MPMediaItemPropertyTitle: nowPlayingTitle,
+      MPMediaItemPropertyArtist: nowPlayingArtist,
+      MPNowPlayingInfoPropertyElapsedPlaybackTime: currentTime,
+      MPNowPlayingInfoPropertyPlaybackRate: isPlaying ? 1.0 : 0.0,
+      MPNowPlayingInfoPropertyIsLiveStream: !(duration > 0),
+    ]
     if duration > 0 {
       info[MPMediaItemPropertyPlaybackDuration] = duration
+    }
+    if let nowPlayingArtwork {
+      info[MPMediaItemPropertyArtwork] = nowPlayingArtwork
     }
     MPNowPlayingInfoCenter.default().nowPlayingInfo = info
   }

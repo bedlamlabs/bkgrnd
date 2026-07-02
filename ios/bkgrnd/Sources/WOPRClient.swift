@@ -67,6 +67,28 @@ actor WOPRClient {
     var videoId: String
     var thumbnail: String
     var channel: String
+    var duration: Double?
+  }
+
+  /// Convert a Spotify playlist/album/track URL into a YouTube-backed queue
+  /// via the relay. maxTracks=1 is the fast first-track phase.
+  func spotifyQueue(for spotifyURL: String, maxTracks: Int? = nil) async throws -> SpotifyQueueResponse {
+    var comps = URLComponents(url: config.baseURL.appendingPathComponent("/api/v1/spotify/queue"), resolvingAgainstBaseURL: false)!
+    var items = [URLQueryItem(name: "url", value: spotifyURL)]
+    if let maxTracks {
+      items.append(URLQueryItem(name: "max_tracks", value: String(maxTracks)))
+    }
+    comps.queryItems = items
+    var req = URLRequest(url: comps.url!)
+    req.httpMethod = "GET"
+    req.timeoutInterval = 120
+    addAuth(&req)
+    let (data, resp) = try await URLSession.shared.data(for: req)
+    guard (resp as? HTTPURLResponse)?.statusCode == 200 else {
+      let message = String(data: data, encoding: .utf8) ?? ""
+      throw NSError(domain: "bkgrnd", code: 1, userInfo: [NSLocalizedDescriptionKey: message.isEmpty ? "Spotify conversion failed" : message])
+    }
+    return try JSONDecoder().decode(SpotifyQueueResponse.self, from: data)
   }
 
   struct LocalStatusResponse: Decodable {
