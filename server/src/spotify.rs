@@ -1,16 +1,24 @@
+//! Spotify Web API metadata access for playlist/album/track → YouTube queue
+//! conversion. This module only talks to Spotify; YouTube matching lives in
+//! main.rs so it can share the global yt-dlp semaphore.
+
 use base64::{engine::general_purpose, Engine as _};
 use reqwest::header;
 use serde::Deserialize;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use crate::config;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SpotifyKind {
+pub enum SpotifyKind {
     Playlist,
     Album,
     Track,
+}
+
+#[derive(Debug)]
+pub struct SpotifyRef {
+    pub kind: SpotifyKind,
+    pub id: String,
 }
 
 #[derive(Debug, Clone)]
@@ -21,7 +29,7 @@ pub struct TrackMeta {
 
 impl TrackMeta {
     pub fn display_title(&self) -> String {
-        let artist = self.artist();
+        let artist = self.artists.join(", ");
         if artist.is_empty() {
             self.name.clone()
         } else {
@@ -30,7 +38,7 @@ impl TrackMeta {
     }
 
     pub fn search_query(&self) -> String {
-        let artist = self.artist();
+        let artist = self.artists.join(", ");
         if artist.is_empty() {
             format!("{} audio", self.name)
         } else {
@@ -43,9 +51,6 @@ impl TrackMeta {
     }
 }
 
-/// Spotify metadata for a playlist/album/track: everything needed to build a
-/// YouTube-backed queue. YouTube matching happens in the player so the first
-/// track can start before the rest of the queue is matched.
 #[derive(Debug)]
 pub struct SpotifySource {
     pub title: String,
@@ -57,46 +62,7 @@ pub fn is_spotify_url(input: &str) -> bool {
     parse_spotify_ref(input).is_some()
 }
 
-pub fn track_limit() -> usize {
-    let cfg = config::load_config();
-    config::setting(
-        "BKGRND_SPOTIFY_MAX_TRACKS",
-        cfg.spotify_max_tracks.map(|v| v.to_string()).as_deref(),
-    )
-    .and_then(|value| value.parse::<usize>().ok())
-    .filter(|value| *value > 0)
-    .unwrap_or(75)
-}
-
-pub async fn fetch_source(input: &str) -> Result<SpotifySource, String> {
-    let spotify_ref = parse_spotify_ref(input).ok_or_else(|| "Not a Spotify URL".to_string())?;
-    let client = reqwest::Client::new();
-    let token = access_token(&client).await?;
-
-    let (title, thumbnail, tracks) = match spotify_ref.kind {
-        SpotifyKind::Playlist => playlist_tracks(&client, &token, &spotify_ref.id).await?,
-        SpotifyKind::Album => album_tracks(&client, &token, &spotify_ref.id).await?,
-        SpotifyKind::Track => track_item(&client, &token, &spotify_ref.id).await?,
-    };
-
-    if tracks.is_empty() {
-        return Err("Spotify did not return any playable tracks.".to_string());
-    }
-
-    Ok(SpotifySource {
-        title,
-        thumbnail,
-        tracks,
-    })
-}
-
-#[derive(Debug)]
-struct SpotifyRef {
-    kind: SpotifyKind,
-    id: String,
-}
-
-fn parse_spotify_ref(input: &str) -> Option<SpotifyRef> {
+pub fn parse_spotify_ref(input: &str) -> Option<SpotifyRef> {
     let trimmed = input.trim();
 
     if let Some(rest) = trimmed.strip_prefix("spotify:") {
@@ -145,17 +111,20 @@ fn is_valid_spotify_id(id: &str) -> bool {
     id.len() >= 22 && id.chars().all(|c| c.is_ascii_alphanumeric())
 }
 
+fn credentials_error() -> String {
+    "Spotify conversion requires WOPR_SPOTIFY_CLIENT_ID and WOPR_SPOTIFY_CLIENT_SECRET (or WOPR_SPOTIFY_ACCESS_TOKEN) on the server.".to_string()
+}
+
 // Client-credentials tokens last ~1h; cache one per process instead of
 // re-authenticating on every conversion.
 static TOKEN_CACHE: Mutex<Option<(String, Instant)>> = Mutex::new(None);
 
 async fn access_token(client: &reqwest::Client) -> Result<String, String> {
-    let cfg = config::load_config();
-
-    if let Some(token) =
-        config::setting("BKGRND_SPOTIFY_ACCESS_TOKEN", cfg.spotify_access_token.as_deref())
-    {
-        return Ok(token);
+    if let Ok(token) = std::env::var("WOPR_SPOTIFY_ACCESS_TOKEN") {
+        let token = token.trim();
+        if !token.is_empty() {
+            return Ok(token.to_string());
+        }
     }
 
     if let Some((token, expires_at)) = TOKEN_CACHE.lock().unwrap().clone() {
@@ -164,13 +133,12 @@ async fn access_token(client: &reqwest::Client) -> Result<String, String> {
         }
     }
 
-    let client_id = config::setting("BKGRND_SPOTIFY_CLIENT_ID", cfg.spotify_client_id.as_deref())
-        .ok_or_else(spotify_credentials_error)?;
-    let client_secret = config::setting(
-        "BKGRND_SPOTIFY_CLIENT_SECRET",
-        cfg.spotify_client_secret.as_deref(),
-    )
-    .ok_or_else(spotify_credentials_error)?;
+    let client_id = std::env::var("WOPR_SPOTIFY_CLIENT_ID").map_err(|_| credentials_error())?;
+    let client_secret =
+        std::env::var("WOPR_SPOTIFY_CLIENT_SECRET").map_err(|_| credentials_error())?;
+    if client_id.trim().is_empty() || client_secret.trim().is_empty() {
+        return Err(credentials_error());
+    }
 
     #[derive(Deserialize)]
     struct TokenResponse {
@@ -203,13 +171,6 @@ async fn access_token(client: &reqwest::Client) -> Result<String, String> {
     let ttl = Duration::from_secs(token.expires_in.max(60).saturating_sub(60));
     *TOKEN_CACHE.lock().unwrap() = Some((token.access_token.clone(), Instant::now() + ttl));
     Ok(token.access_token)
-}
-
-fn spotify_credentials_error() -> String {
-    format!(
-        "Spotify conversion needs credentials. Add spotifyClientId and spotifyClientSecret to {} (or set BKGRND_SPOTIFY_CLIENT_ID / BKGRND_SPOTIFY_CLIENT_SECRET).",
-        config::config_path().display()
-    )
 }
 
 async fn spotify_get<T: for<'de> Deserialize<'de>>(
@@ -255,11 +216,7 @@ impl From<SpotifyTrack> for TrackMeta {
     fn from(track: SpotifyTrack) -> Self {
         TrackMeta {
             name: track.name,
-            artists: track
-                .artists
-                .into_iter()
-                .map(|artist| artist.name)
-                .collect(),
+            artists: track.artists.into_iter().map(|a| a.name).collect(),
         }
     }
 }
@@ -280,6 +237,48 @@ struct PlaylistTrackItem {
 struct PlaylistTracksPage {
     items: Vec<PlaylistTrackItem>,
     next: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AlbumMeta {
+    name: String,
+    #[serde(default)]
+    images: Vec<SpotifyImage>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AlbumTracksPage {
+    items: Vec<SpotifyTrack>,
+    next: Option<String>,
+}
+
+fn first_image(images: Vec<SpotifyImage>) -> String {
+    images
+        .into_iter()
+        .next()
+        .map(|image| image.url)
+        .unwrap_or_default()
+}
+
+pub async fn fetch_source(client: &reqwest::Client, input: &str) -> Result<SpotifySource, String> {
+    let spotify_ref = parse_spotify_ref(input).ok_or_else(|| "Not a Spotify URL".to_string())?;
+    let token = access_token(client).await?;
+
+    let (title, thumbnail, tracks) = match spotify_ref.kind {
+        SpotifyKind::Playlist => playlist_tracks(client, &token, &spotify_ref.id).await?,
+        SpotifyKind::Album => album_tracks(client, &token, &spotify_ref.id).await?,
+        SpotifyKind::Track => track_item(client, &token, &spotify_ref.id).await?,
+    };
+
+    if tracks.is_empty() {
+        return Err("Spotify did not return any playable tracks.".to_string());
+    }
+
+    Ok(SpotifySource {
+        title,
+        thumbnail,
+        tracks,
+    })
 }
 
 async fn playlist_tracks(
@@ -310,19 +309,6 @@ async fn playlist_tracks(
     }
 
     Ok((meta.name, first_image(meta.images), tracks))
-}
-
-#[derive(Debug, Deserialize)]
-struct AlbumMeta {
-    name: String,
-    #[serde(default)]
-    images: Vec<SpotifyImage>,
-}
-
-#[derive(Debug, Deserialize)]
-struct AlbumTracksPage {
-    items: Vec<SpotifyTrack>,
-    next: Option<String>,
 }
 
 async fn album_tracks(
@@ -368,22 +354,10 @@ async fn track_item(
         .unwrap_or_default();
     let meta = TrackMeta {
         name: track.name.clone(),
-        artists: track
-            .artists
-            .into_iter()
-            .map(|artist| artist.name)
-            .collect(),
+        artists: track.artists.into_iter().map(|a| a.name).collect(),
     };
 
     Ok((track.name, thumbnail, vec![meta]))
-}
-
-fn first_image(images: Vec<SpotifyImage>) -> String {
-    images
-        .into_iter()
-        .next()
-        .map(|image| image.url)
-        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -395,31 +369,31 @@ mod tests {
         let parsed =
             parse_spotify_ref("https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M?si=abc")
                 .unwrap();
-
         assert_eq!(parsed.kind, SpotifyKind::Playlist);
         assert_eq!(parsed.id, "37i9dQZF1DXcBWIGoYBM5M");
     }
 
     #[test]
-    fn parses_internationalized_open_spotify_urls() {
-        let parsed =
+    fn parses_internationalized_urls_and_uris() {
+        let album =
             parse_spotify_ref("https://open.spotify.com/intl-us/album/4aawyAB9vmqN3uQ7FjRGTy")
                 .unwrap();
+        assert_eq!(album.kind, SpotifyKind::Album);
 
-        assert_eq!(parsed.kind, SpotifyKind::Album);
-        assert_eq!(parsed.id, "4aawyAB9vmqN3uQ7FjRGTy");
+        let track = parse_spotify_ref("spotify:track:11dFghVXANMlKmJXsNCbNl").unwrap();
+        assert_eq!(track.kind, SpotifyKind::Track);
+        assert_eq!(track.id, "11dFghVXANMlKmJXsNCbNl");
     }
 
     #[test]
-    fn parses_spotify_uri() {
-        let parsed = parse_spotify_ref("spotify:track:11dFghVXANMlKmJXsNCbNl").unwrap();
-
-        assert_eq!(parsed.kind, SpotifyKind::Track);
-        assert_eq!(parsed.id, "11dFghVXANMlKmJXsNCbNl");
+    fn rejects_non_spotify_input() {
+        assert!(parse_spotify_ref("https://www.youtube.com/watch?v=dQw4w9WgXcQ").is_none());
+        assert!(parse_spotify_ref("spotify:episode:11dFghVXANMlKmJXsNCbNl").is_none());
+        assert!(parse_spotify_ref("https://open.spotify.com/playlist/short").is_none());
     }
 
     #[test]
-    fn builds_display_title_and_search_query() {
+    fn builds_display_title_and_query() {
         let meta = TrackMeta {
             name: "Song".to_string(),
             artists: vec!["A".to_string(), "B".to_string()],

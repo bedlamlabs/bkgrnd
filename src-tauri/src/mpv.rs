@@ -1,20 +1,29 @@
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tauri::AppHandle;
 use tauri::Manager;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 use tokio::process::{Child, Command};
 
-fn ipc_path() -> String {
-    let suffix = std::env::var("USER")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| std::process::id().to_string());
-    format!("/tmp/bkgrnd-mpv-ipc-{}", suffix)
+const IPC_PREFIX: &str = "/tmp/bkgrnd-mpv-ipc-";
+
+static IPC_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+// Each mpv session gets its own socket so a crashed/stale mpv (or a second
+// app instance) can never intercept commands meant for the current session.
+fn new_ipc_path() -> String {
+    format!(
+        "{}{}-{}",
+        IPC_PREFIX,
+        std::process::id(),
+        IPC_COUNTER.fetch_add(1, Ordering::Relaxed)
+    )
 }
 
 pub struct MpvSession {
     pub child: Child,
+    pub ipc_path: String,
 }
 
 fn mpv_dir(app: &AppHandle) -> Result<PathBuf, String> {
@@ -31,9 +40,7 @@ pub async fn spawn_mpv(
     _title: &str,
     _url: &str,
 ) -> Result<MpvSession, String> {
-    let ipc_path = ipc_path();
-
-    // Clean up stale IPC socket
+    let ipc_path = new_ipc_path();
     let _ = std::fs::remove_file(&ipc_path);
 
     let mpv_bundle_dir = mpv_dir(app)?;
@@ -85,7 +92,7 @@ pub async fn spawn_mpv(
         return Err(e);
     }
 
-    Ok(MpvSession { child })
+    Ok(MpvSession { child, ipc_path })
 }
 
 async fn wait_for_ipc(path: &str, timeout_ms: u64) -> Result<(), String> {
@@ -101,8 +108,11 @@ async fn wait_for_ipc(path: &str, timeout_ms: u64) -> Result<(), String> {
     }
 }
 
-pub async fn mpv_command(command: &[serde_json::Value]) -> Result<serde_json::Value, String> {
-    let stream = UnixStream::connect(ipc_path())
+pub async fn mpv_command(
+    ipc_path: &str,
+    command: &[serde_json::Value],
+) -> Result<serde_json::Value, String> {
+    let stream = UnixStream::connect(ipc_path)
         .await
         .map_err(|e| format!("mpv IPC connect failed: {}", e))?;
 
@@ -150,41 +160,118 @@ pub async fn mpv_command(command: &[serde_json::Value]) -> Result<serde_json::Va
     }
 }
 
-pub async fn pause() -> Result<(), String> {
-    mpv_command(&[serde_json::json!("cycle"), serde_json::json!("pause")]).await?;
+#[derive(Debug, Default, Clone, Copy)]
+pub struct StatusSnapshot {
+    pub paused: bool,
+    pub position: Option<f64>,
+    pub duration: Option<f64>,
+}
+
+/// Read pause/time-pos/duration over ONE IPC connection. Status is polled
+/// every 1-2s by both the popover and the WOPR sync loop; three separate
+/// connects per poll (each with its own 3s timeout) made a wedged mpv stall
+/// callers for ~9s.
+pub async fn status_snapshot(ipc_path: &str) -> StatusSnapshot {
+    let Ok(stream) = UnixStream::connect(ipc_path).await else {
+        return StatusSnapshot::default();
+    };
+    let (reader, mut writer) = stream.into_split();
+
+    let properties = ["pause", "time-pos", "duration"];
+    let mut request = String::new();
+    for (index, property) in properties.iter().enumerate() {
+        let msg = serde_json::json!({
+            "command": ["get_property", property],
+            "request_id": index + 1,
+        });
+        request.push_str(&serde_json::to_string(&msg).unwrap());
+        request.push('\n');
+    }
+    if writer.write_all(request.as_bytes()).await.is_err() {
+        return StatusSnapshot::default();
+    }
+
+    let mut answers: [Option<serde_json::Value>; 3] = [None, None, None];
+    let mut buf_reader = BufReader::new(reader);
+    let read_result = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        let mut line = String::new();
+        let mut received = 0usize;
+        while received < properties.len() {
+            line.clear();
+            match buf_reader.read_line(&mut line).await {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {}
+            }
+            let Ok(parsed) = serde_json::from_str::<serde_json::Value>(line.trim()) else {
+                continue;
+            };
+            let Some(request_id) = parsed.get("request_id").and_then(|v| v.as_u64()) else {
+                continue; // unsolicited event, ignore
+            };
+            let index = (request_id as usize).wrapping_sub(1);
+            if index < answers.len() && answers[index].is_none() {
+                answers[index] = Some(parsed.get("data").cloned().unwrap_or(serde_json::Value::Null));
+                received += 1;
+            }
+        }
+    })
+    .await;
+    let _ = read_result;
+
+    let number = |value: &Option<serde_json::Value>| {
+        value
+            .as_ref()
+            .and_then(|v| v.as_f64())
+            .filter(|v| v.is_finite())
+    };
+
+    StatusSnapshot {
+        paused: answers[0]
+            .as_ref()
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+        position: number(&answers[1]),
+        duration: number(&answers[2]).filter(|duration| *duration > 0.0),
+    }
+}
+
+pub async fn pause(ipc_path: &str) -> Result<(), String> {
+    mpv_command(ipc_path, &[serde_json::json!("cycle"), serde_json::json!("pause")]).await?;
     Ok(())
 }
 
 pub async fn stop_mpv(session: &mut MpvSession) {
-    let _ = mpv_command(&[serde_json::json!("quit")]).await;
+    let _ = mpv_command(&session.ipc_path, &[serde_json::json!("quit")]).await;
     // Fallback: kill process
     let _ = session.child.start_kill();
     let _ = session.child.wait().await;
-    let _ = std::fs::remove_file(ipc_path());
+    let _ = std::fs::remove_file(&session.ipc_path);
 }
 
+/// Startup cleanup: quit any mpv left over from a previous run (crash, force
+/// quit) and remove its orphaned sockets. Sockets are namespaced per PID, so
+/// anything on disk that isn't ours is stale.
 pub async fn stop_stale_mpv() {
-    let _ = mpv_command(&[serde_json::json!("quit")]).await;
-    let _ = std::fs::remove_file(ipc_path());
-}
-
-pub async fn get_paused() -> bool {
-    match mpv_command(&[
-        serde_json::json!("get_property"),
-        serde_json::json!("pause"),
-    ])
-    .await
-    {
-        Ok(val) => val.as_bool().unwrap_or(false),
-        Err(_) => false,
+    let Ok(entries) = std::fs::read_dir("/tmp") else {
+        return;
+    };
+    let own_prefix = format!("{}{}-", IPC_PREFIX, std::process::id());
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(path_str) = path.to_str() else { continue };
+        if !path_str.starts_with(IPC_PREFIX) || path_str.starts_with(&own_prefix) {
+            continue;
+        }
+        let _ = mpv_command(path_str, &[serde_json::json!("quit")]).await;
+        let _ = std::fs::remove_file(&path);
     }
 }
 
-pub async fn get_volume() -> f64 {
-    match mpv_command(&[
-        serde_json::json!("get_property"),
-        serde_json::json!("volume"),
-    ])
+pub async fn get_volume(ipc_path: &str) -> f64 {
+    match mpv_command(
+        ipc_path,
+        &[serde_json::json!("get_property"), serde_json::json!("volume")],
+    )
     .await
     {
         Ok(val) => val.as_f64().unwrap_or(100.0),
@@ -192,37 +279,28 @@ pub async fn get_volume() -> f64 {
     }
 }
 
-async fn get_number_property(name: &str) -> Option<f64> {
-    match mpv_command(&[serde_json::json!("get_property"), serde_json::json!(name)]).await {
-        Ok(val) => val.as_f64().filter(|value| value.is_finite()),
-        Err(_) => None,
-    }
-}
-
-pub async fn get_time_position() -> Option<f64> {
-    get_number_property("time-pos").await
-}
-
-pub async fn get_duration() -> Option<f64> {
-    get_number_property("duration").await
-}
-
-pub async fn set_volume(vol: f64) -> Result<(), String> {
-    mpv_command(&[
-        serde_json::json!("set_property"),
-        serde_json::json!("volume"),
-        serde_json::json!(vol),
-    ])
+pub async fn set_volume(ipc_path: &str, vol: f64) -> Result<(), String> {
+    mpv_command(
+        ipc_path,
+        &[
+            serde_json::json!("set_property"),
+            serde_json::json!("volume"),
+            serde_json::json!(vol),
+        ],
+    )
     .await?;
     Ok(())
 }
 
-pub async fn seek(seconds: f64) -> Result<(), String> {
-    mpv_command(&[
-        serde_json::json!("seek"),
-        serde_json::json!(seconds),
-        serde_json::json!("relative"),
-    ])
+pub async fn seek(ipc_path: &str, seconds: f64) -> Result<(), String> {
+    mpv_command(
+        ipc_path,
+        &[
+            serde_json::json!("seek"),
+            serde_json::json!(seconds),
+            serde_json::json!("relative"),
+        ],
+    )
     .await?;
     Ok(())
 }

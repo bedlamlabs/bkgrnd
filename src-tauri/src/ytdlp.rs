@@ -63,39 +63,55 @@ pub fn is_playlist_url(url_str: &str) -> bool {
     false
 }
 
+// Pinning a single fast client avoids yt-dlp querying several clients (the
+// default), which is markedly faster per resolve — especially over a high
+// latency path. We fall back to default extraction if the fast client fails.
+const FAST_PLAYER_CLIENT: &str = "youtube:player_client=android_vr";
+
+fn js_runtime_arg() -> Option<String> {
+    std::env::var("BKGRND_YTDLP_JS_RUNTIMES")
+        .ok()
+        .or_else(|| std::env::var("WOPR_YTDLP_JS_RUNTIMES").ok())
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
 pub async fn extract_stream_url(app: &AppHandle, url: &str) -> Result<String, String> {
     let format = "bestaudio[ext=m4a]/bestaudio[acodec^=mp4a]/bestaudio/best";
     eprintln!("[ytdlp] Resolving stream for {}", url);
-    let mut args = vec!["-f", format, "--get-url", "--no-playlist"];
-    let js_runtimes = std::env::var("BKGRND_YTDLP_JS_RUNTIMES")
-        .ok()
-        .or_else(|| std::env::var("WOPR_YTDLP_JS_RUNTIMES").ok());
-    if let Some(value) = js_runtimes
-        .as_deref()
-        .filter(|value| !value.trim().is_empty())
-    {
-        args.push("--js-runtimes");
-        args.push(value.trim());
-    }
-    args.push(url);
+    let js = js_runtime_arg();
 
-    let output = ytdlp_sidecar(app, &args)?.output().await.map_err(|e| {
-        eprintln!("[ytdlp] Spawn failed: {}", e);
-        format!("yt-dlp spawn failed: {}", e)
-    })?;
-
-    if output.status.success() {
-        let result = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if !result.is_empty() {
-            eprintln!("[ytdlp] Got stream URL ({} chars)", result.len());
-            return Ok(result);
+    for fast in [true, false] {
+        let mut args: Vec<&str> = vec!["-f", format, "--get-url", "--no-playlist"];
+        if fast {
+            args.push("--extractor-args");
+            args.push(FAST_PLAYER_CLIENT);
         }
-        return Err("YouTube did not return a playable stream URL.".to_string());
-    }
+        if let Some(value) = js.as_deref() {
+            args.push("--js-runtimes");
+            args.push(value);
+        }
+        args.push(url);
 
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    eprintln!("[ytdlp] Resolve failed: {}", stderr.trim());
-    Err(user_facing_ytdlp_error(&stderr))
+        let output = ytdlp_sidecar(app, &args)?.output().await.map_err(|e| {
+            eprintln!("[ytdlp] Spawn failed: {}", e);
+            format!("yt-dlp spawn failed: {}", e)
+        })?;
+
+        if output.status.success() {
+            let result = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !result.is_empty() {
+                return Ok(result);
+            }
+        } else if !fast {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            eprintln!("[ytdlp] Resolve failed: {}", stderr.trim());
+            return Err(user_facing_ytdlp_error(&stderr));
+        } else {
+            eprintln!("[ytdlp] fast client failed, falling back to default");
+        }
+    }
+    Err("YouTube did not return a playable stream URL.".to_string())
 }
 
 #[derive(Debug)]
@@ -110,82 +126,86 @@ pub struct StreamInfo {
 
 pub async fn resolve_stream_info(app: &AppHandle, url: &str) -> Result<StreamInfo, String> {
     let format = "bestaudio[ext=m4a]/bestaudio[acodec^=mp4a]/bestaudio/best";
-    let mut args = vec![
-        "-f",
-        format,
-        "--no-playlist",
-        "--print",
-        "%(title)s",
-        "--print",
-        "%(is_live)s",
-        "--print",
-        "%(id)s",
-        "--print",
-        "%(channel,uploader)s",
-        "--print",
-        "%(duration)s",
-        "--get-url",
-    ];
-    let js_runtimes = std::env::var("BKGRND_YTDLP_JS_RUNTIMES")
-        .ok()
-        .or_else(|| std::env::var("WOPR_YTDLP_JS_RUNTIMES").ok());
-    if let Some(value) = js_runtimes
-        .as_deref()
-        .filter(|value| !value.trim().is_empty())
-    {
-        args.push("--js-runtimes");
-        args.push(value.trim());
-    }
-    args.push(url);
-
+    let js = js_runtime_arg();
     eprintln!("[ytdlp] Resolving metadata + stream for {}", url);
-    let output = ytdlp_sidecar(app, &args)?.output().await.map_err(|e| {
-        eprintln!("[ytdlp] Spawn failed: {}", e);
-        format!("yt-dlp spawn failed: {}", e)
-    })?;
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        eprintln!("[ytdlp] Resolve failed: {}", stderr.trim());
-        return Err(user_facing_ytdlp_error(&stderr));
+    for fast in [true, false] {
+        let mut args: Vec<&str> = vec![
+            "-f", format, "--no-playlist",
+            "--print", "%(title)s",
+            "--print", "%(is_live)s",
+            "--print", "%(id)s",
+            "--print", "%(channel,uploader)s",
+            "--print", "%(duration)s",
+            "--get-url",
+        ];
+        if fast {
+            args.push("--extractor-args");
+            args.push(FAST_PLAYER_CLIENT);
+        }
+        if let Some(value) = js.as_deref() {
+            args.push("--js-runtimes");
+            args.push(value);
+        }
+        args.push(url);
+
+        let output = ytdlp_sidecar(app, &args)?.output().await.map_err(|e| {
+            eprintln!("[ytdlp] Spawn failed: {}", e);
+            format!("yt-dlp spawn failed: {}", e)
+        })?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if fast {
+                eprintln!("[ytdlp] fast client failed, falling back to default");
+                continue;
+            }
+            eprintln!("[ytdlp] Resolve failed: {}", stderr.trim());
+            return Err(user_facing_ytdlp_error(&stderr));
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let mut lines = stdout.lines().filter(|line| !line.trim().is_empty());
+        let title = lines.next().unwrap_or("Unknown").trim().to_string();
+        let is_live = lines
+            .next()
+            .map(|value| value.trim().eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+        let video_id = lines
+            .next()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| extract_video_id(url));
+        let channel = lines
+            .next()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty() && !value.eq_ignore_ascii_case("none"))
+            .unwrap_or_default();
+        let duration = lines.next().and_then(parse_duration);
+        let stream_url = lines
+            .find(|line| line.starts_with("http://") || line.starts_with("https://"))
+            .map(str::trim)
+            .unwrap_or("")
+            .to_string();
+
+        if stream_url.is_empty() {
+            if fast {
+                continue;
+            }
+            return Err("YouTube did not return a playable stream URL.".to_string());
+        }
+
+        return Ok(StreamInfo {
+            stream_url,
+            title,
+            is_live,
+            video_id,
+            channel,
+            duration,
+        });
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let mut lines = stdout.lines().filter(|line| !line.trim().is_empty());
-    let title = lines.next().unwrap_or("Unknown").trim().to_string();
-    let is_live = lines
-        .next()
-        .map(|value| value.trim().eq_ignore_ascii_case("true"))
-        .unwrap_or(false);
-    let video_id = lines
-        .next()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| extract_video_id(url));
-    let channel = lines
-        .next()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty() && !value.eq_ignore_ascii_case("none"))
-        .unwrap_or_default();
-    let duration = lines.next().and_then(parse_duration);
-    let stream_url = lines
-        .find(|line| line.starts_with("http://") || line.starts_with("https://"))
-        .map(str::trim)
-        .unwrap_or("")
-        .to_string();
-
-    if stream_url.is_empty() {
-        return Err("YouTube did not return a playable stream URL.".to_string());
-    }
-
-    Ok(StreamInfo {
-        stream_url,
-        title,
-        is_live,
-        video_id,
-        channel,
-        duration,
-    })
+    Err("YouTube did not return a playable stream URL.".to_string())
 }
 
 fn parse_duration(value: &str) -> Option<f64> {
@@ -240,45 +260,6 @@ fn user_facing_ytdlp_error(stderr: &str) -> String {
         .filter(|message| !message.is_empty())
         .map(|message| message.to_string())
         .unwrap_or_else(|| "YouTube did not return a playable stream.".to_string())
-}
-
-#[derive(Debug)]
-pub struct VideoInfo {
-    pub title: String,
-    pub is_live: bool,
-    pub video_id: String,
-}
-
-pub async fn get_video_info(app: &AppHandle, url: &str) -> VideoInfo {
-    let output = app
-        .shell()
-        .sidecar("yt-dlp")
-        .ok()
-        .map(|cmd| cmd.args(["--dump-json", "--no-playlist", "--skip-download", url]));
-
-    if let Some(cmd) = output {
-        if let Ok(output) = cmd.output().await {
-            if output.status.success() {
-                let json_str = String::from_utf8_lossy(&output.stdout);
-                if let Ok(info) = serde_json::from_str::<serde_json::Value>(json_str.trim()) {
-                    return VideoInfo {
-                        title: info["title"].as_str().unwrap_or("Unknown").to_string(),
-                        is_live: info["is_live"].as_bool().unwrap_or(false),
-                        video_id: info["id"]
-                            .as_str()
-                            .map(|s| s.to_string())
-                            .unwrap_or_else(|| extract_video_id(url)),
-                    };
-                }
-            }
-        }
-    }
-
-    VideoInfo {
-        title: "Unknown".to_string(),
-        is_live: false,
-        video_id: extract_video_id(url),
-    }
 }
 
 #[derive(Debug, Clone)]

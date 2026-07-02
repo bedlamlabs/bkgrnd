@@ -62,6 +62,9 @@ let libraryItems = [];
 let recentItems = [];
 let searchItems = [];
 let remoteNow = null;
+let remoteQueue = [];
+let remoteQueueIndex = -1;
+let lastGridKey = "";
 let localState = { online: false, status: null };
 let activeStreamUrl = "";
 let activeSourceUrl = "";
@@ -317,6 +320,20 @@ async function loadLibrary() {
 function renderGrid() {
   const localStatus = localState.status;
   const localPlaying = Boolean(localState.online && localStatus?.isPlaying);
+
+  // This runs on every 3s status poll; skip the full DOM rebuild (24 cards +
+  // images) when nothing it renders has actually changed.
+  const items = libraryItems.length ? libraryItems : recentItems;
+  const gridKey = JSON.stringify([
+    activeScope,
+    localState.online,
+    localPlaying,
+    localStatus?.title || "",
+    items.slice(0, 24).map((item) => item.url)
+  ]);
+  if (gridKey === lastGridKey) return;
+  lastGridKey = gridKey;
+
   localActiveDot.classList.toggle("hidden", !localPlaying);
 
   if (activeScope === "local" && !localState.online) {
@@ -329,7 +346,6 @@ function renderGrid() {
     scopeStatus.classList.add("hidden");
   }
 
-  const items = libraryItems.length ? libraryItems : recentItems;
   mixGrid.innerHTML = "";
   if (!items.length) {
     mixGrid.innerHTML = `<div class="scope-status">No recent streams yet. Use search to start one.</div>`;
@@ -437,7 +453,76 @@ async function playItem(item) {
   setScreen("home");
 }
 
+function isSpotifyUrl(url) {
+  return /^(https?:\/\/open\.spotify\.com\/|spotify:)/i.test(String(url || "").trim());
+}
+
 async function playRemote(item) {
+  if (isSpotifyUrl(item.url)) {
+    await playSpotifyRemote(item);
+    return;
+  }
+  remoteQueue = [];
+  remoteQueueIndex = -1;
+  await playRemoteTrack(item);
+}
+
+// Spotify URLs can't be resolved by yt-dlp; the server converts them into a
+// YouTube-backed queue which we then play with client-side auto-advance.
+async function playSpotifyRemote(item) {
+  const playToken = ++remotePlayToken;
+  remoteNow = item;
+  activeSourceItem = item;
+  activeResolveMeta = null;
+  renderMiniPlayer();
+  renderPlayer();
+  setPlayerStatus("converting");
+  startAcquisitionStatus(item.url);
+
+  let body;
+  try {
+    const url = new URL("api/v1/spotify/queue", apiBaseHref());
+    url.searchParams.set("url", item.url);
+    const resp = await fetch(withToken(url.toString()), { cache: "no-store" });
+    if (playToken !== remotePlayToken) return;
+    if (!resp.ok) {
+      const text = (await resp.text()).trim();
+      console.warn("Spotify conversion failed", resp.status, text);
+      stopAcquisitionStatus();
+      setPlayerStatus(resolveFailureStatus(resp, text));
+      return;
+    }
+    body = await resp.json();
+  } catch {
+    if (playToken !== remotePlayToken) return;
+    stopAcquisitionStatus();
+    setPlayerStatus("error");
+    return;
+  }
+
+  if (playToken !== remotePlayToken) return;
+  const items = Array.isArray(body?.items) ? body.items.map(normalizeItem) : [];
+  if (!items.length) {
+    stopAcquisitionStatus();
+    setPlayerStatus("no matches");
+    return;
+  }
+
+  remoteQueue = items;
+  remoteQueueIndex = 0;
+  await playRemoteTrack(items[0]);
+}
+
+function advanceRemoteQueue(step) {
+  if (!remoteQueue.length) return false;
+  const next = remoteQueueIndex + step;
+  if (next < 0 || next >= remoteQueue.length) return false;
+  remoteQueueIndex = next;
+  playRemoteTrack(remoteQueue[next]);
+  return true;
+}
+
+async function playRemoteTrack(item) {
   const sourceUrl = String(item.url || "").trim();
   if (!sourceUrl) return;
   const playToken = ++remotePlayToken;
@@ -706,6 +791,8 @@ function stopRemote() {
   activeResolveMeta = null;
   audio.load();
   remoteNow = null;
+  remoteQueue = [];
+  remoteQueueIndex = -1;
   stopAcquisitionStatus();
   setPlayerStatus("");
   renderMiniPlayer();
@@ -760,6 +847,17 @@ audio.addEventListener("playing", () => {
   setPlayerStatus("");
   renderMiniPlayer();
   renderPlayer();
+  updateMediaSessionMetadata();
+  // Warm the next queued track so auto-advance starts instantly.
+  if (remoteQueue.length && remoteQueueIndex >= 0 && remoteQueueIndex < remoteQueue.length - 1) {
+    prewarmStream(remoteQueue[remoteQueueIndex + 1].url);
+  }
+});
+audio.addEventListener("ended", () => {
+  if (!advanceRemoteQueue(1)) {
+    renderMiniPlayer();
+    renderPlayer();
+  }
 });
 audio.addEventListener("timeupdate", () => {
   lastProgressAt = Date.now();
@@ -848,10 +946,30 @@ settings.addEventListener("close", () => {
   refreshLocalStatus();
 });
 
+// Lock-screen / control-center metadata for the current remote track.
+function updateMediaSessionMetadata() {
+  if (!("mediaSession" in navigator)) return;
+  const current = remoteNow;
+  if (!current) return;
+  try {
+    const artwork = current.thumbnail
+      ? [{ src: thumbnailSrc(current.thumbnail), sizes: "320x180", type: "image/jpeg" }]
+      : [];
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title: current.title || "bkgrnd",
+      artist: current.channel || "",
+      album: "bkgrnd",
+      artwork
+    });
+  } catch {}
+}
+
 if ("mediaSession" in navigator) {
   try {
     navigator.mediaSession.setActionHandler("play", () => audio.play().catch(() => {}));
     navigator.mediaSession.setActionHandler("pause", () => audio.pause());
+    navigator.mediaSession.setActionHandler("nexttrack", () => advanceRemoteQueue(1));
+    navigator.mediaSession.setActionHandler("previoustrack", () => advanceRemoteQueue(-1));
   } catch {}
 }
 

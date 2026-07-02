@@ -1,7 +1,9 @@
+mod spotify;
+
 use anyhow::Context;
 use axum::{
     body::Body,
-    extract::{Json, Query, State},
+    extract::{DefaultBodyLimit, Json, Query, State},
     http::{header, HeaderMap, HeaderValue, Response, StatusCode},
     response::{IntoResponse, Redirect},
     routing::{get, post},
@@ -16,13 +18,22 @@ use std::{
     sync::Arc,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, Notify, Semaphore};
+use tokio::task::JoinSet;
 use tokio::time::timeout;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 use tower_http::services::ServeDir;
 
 const YTDLP_RESOLVE_TIMEOUT: Duration = Duration::from_secs(60);
 const YTDLP_SEARCH_TIMEOUT: Duration = Duration::from_secs(30);
+// yt-dlp forks a python + JS-runtime process per invocation; cap global
+// concurrency so a burst of clients can't exhaust the host.
+const YTDLP_MAX_CONCURRENCY: usize = 4;
+const SEARCH_CACHE_TTL: Duration = Duration::from_secs(5 * 60);
+// Long-poll hold for /local/commands/next: sub-second command pickup without
+// the Mac hammering the endpoint every 2s.
+const COMMAND_LONG_POLL: Duration = Duration::from_secs(25);
+const SPOTIFY_MATCH_CONCURRENCY: usize = 3;
 
 #[derive(Clone)]
 struct AppState {
@@ -33,9 +44,12 @@ struct AppState {
     stream_cache: Arc<Mutex<HashMap<String, CachedStreamUrl>>>,
     stream_failures: Arc<Mutex<HashMap<String, CachedStreamFailure>>>,
     stream_resolves: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
+    search_cache: Arc<Mutex<HashMap<String, (Instant, Vec<SearchResult>)>>>,
+    ytdlp_sem: Arc<Semaphore>,
     local_status: Arc<Mutex<Option<LocalStatusRecord>>>,
     local_commands: Arc<Mutex<VecDeque<(Instant, LocalPlaybackCommand)>>>,
     next_local_command_id: Arc<Mutex<u64>>,
+    command_notify: Arc<Notify>,
 }
 
 #[derive(Clone)]
@@ -496,6 +510,8 @@ async fn post_local_command(
     while commands.len() > 50 {
         commands.pop_front();
     }
+    drop(commands);
+    state.command_notify.notify_waiters();
 
     Json(command).into_response()
 }
@@ -512,14 +528,33 @@ async fn get_next_local_command(
     // Drop commands that have been waiting too long: if the Mac was offline when
     // the phone enqueued taps, we don't want them to replay minutes later.
     const COMMAND_TTL: Duration = Duration::from_secs(30);
-    let mut commands = state.local_commands.lock().await;
-    let now = Instant::now();
-    while let Some((enqueued_at, command)) = commands.pop_front() {
-        if now.duration_since(enqueued_at) <= COMMAND_TTL {
-            return Json(Some(command)).into_response();
+
+    let pop_fresh = |commands: &mut VecDeque<(Instant, LocalPlaybackCommand)>| {
+        let now = Instant::now();
+        while let Some((enqueued_at, command)) = commands.pop_front() {
+            if now.duration_since(enqueued_at) <= COMMAND_TTL {
+                return Some(command);
+            }
         }
+        None
+    };
+
+    // Long-poll: hold the request open until a command arrives (or the hold
+    // window lapses) so phone taps reach the Mac in sub-second time.
+    let deadline = Instant::now() + COMMAND_LONG_POLL;
+    loop {
+        {
+            let mut commands = state.local_commands.lock().await;
+            if let Some(command) = pop_fresh(&mut commands) {
+                return Json(Some(command)).into_response();
+            }
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Json(Option::<LocalPlaybackCommand>::None).into_response();
+        }
+        let _ = timeout(remaining, state.command_notify.notified()).await;
     }
-    Json(Option::<LocalPlaybackCommand>::None).into_response()
 }
 
 #[derive(Debug, Deserialize)]
@@ -741,11 +776,20 @@ async fn stream_audio(
         Ok(r) => r,
         Err(e) => {
             error!("upstream fetch failed: {e}");
+            evict_stream_cache(&state, &q.url).await;
             return StatusCode::BAD_GATEWAY.into_response();
         }
     };
 
     if !(upstream.status().is_success() || upstream.status().as_u16() == 206) {
+        // The cached googlevideo URL is dead (expired/revoked). Evict it so the
+        // client's next retry re-resolves instead of replaying the corpse for
+        // the rest of the cache TTL.
+        warn!(
+            "upstream returned {} for cached stream url; evicting cache entry",
+            upstream.status()
+        );
+        evict_stream_cache(&state, &q.url).await;
         return StatusCode::BAD_GATEWAY.into_response();
     }
 
@@ -777,6 +821,10 @@ async fn stream_audio(
         resp.headers_mut().insert(header::CONTENT_RANGE, v);
     }
     resp
+}
+
+async fn evict_stream_cache(state: &AppState, url: &str) {
+    state.stream_cache.lock().await.remove(url);
 }
 
 #[derive(Debug)]
@@ -862,10 +910,12 @@ async fn resolve_stream_url(state: &AppState, url: &str) -> Result<ResolvedStrea
 
     let start = Instant::now();
     let mut resolved_source = "yt-dlp".to_string();
-    let resolve_result: Result<String, StreamResolveError> = match resolve_direct_url(url).await {
+    let resolve_result: Result<String, StreamResolveError> = match resolve_direct_url(state, url).await {
         Ok(url) => Ok(url),
         Err(e) if e.terminal => {
             let mut failures = state.stream_failures.lock().await;
+            let now = Instant::now();
+            failures.retain(|_, entry| entry.expires_at > now);
             failures.insert(
                 url.to_string(),
                 CachedStreamFailure {
@@ -908,6 +958,10 @@ async fn resolve_stream_url(state: &AppState, url: &str) -> Result<ResolvedStrea
 
     let ttl = cache_ttl_for_stream_url(&resolved);
     let mut cache = state.stream_cache.lock().await;
+    // Opportunistic sweep so long-lived containers don't accumulate expired
+    // entries forever.
+    let now = Instant::now();
+    cache.retain(|_, entry| entry.expires_at > now);
     cache.insert(
         url.to_string(),
         CachedStreamUrl {
@@ -946,7 +1000,12 @@ fn cache_ttl_for_stream_url(stream_url: &str) -> Duration {
     Duration::from_secs((expire - now - 300).min(90 * 60))
 }
 
-async fn resolve_direct_url(url: &str) -> Result<String, StreamResolveError> {
+// Pinning a single fast player client avoids yt-dlp querying several clients
+// (its default), which is markedly faster per resolve. Falls back to default
+// extraction when the fast client fails. Mirrors the menubar app's resolver.
+const FAST_PLAYER_CLIENT: &str = "youtube:player_client=android_vr";
+
+async fn resolve_direct_url(state: &AppState, url: &str) -> Result<String, StreamResolveError> {
     // Prefer iOS-friendly audio first (m4a/mp4a), then generic bestaudio, then best.
     // WebM/Opus can work in some players but is flaky in iOS Safari.
     let format = "bestaudio[ext=m4a]/bestaudio[acodec^=mp4a]/bestaudio/best";
@@ -954,61 +1013,88 @@ async fn resolve_direct_url(url: &str) -> Result<String, StreamResolveError> {
     let cookies = std::env::var("WOPR_YTDLP_COOKIES").ok();
     let js_runtimes = std::env::var("WOPR_YTDLP_JS_RUNTIMES").ok();
 
-    let mut cmd = ytdlp_command();
-    cmd.args(["-f", format, "--get-url", "--no-playlist"]);
+    let _permit = state.ytdlp_sem.acquire().await;
 
-    // Optional: YouTube increasingly requires a JS runtime for extraction.
-    // Example: WOPR_YTDLP_JS_RUNTIMES="deno:/Users/dev/local/bin/deno"
-    if let Some(v) = js_runtimes.as_deref() {
-        let v = v.trim();
-        if !v.is_empty() {
-            cmd.args(["--js-runtimes", v]);
+    let mut last_error: Option<StreamResolveError> = None;
+    for fast in [true, false] {
+        let mut cmd = ytdlp_command();
+        cmd.args(["-f", format, "--get-url", "--no-playlist"]);
+        if fast {
+            cmd.args(["--extractor-args", FAST_PLAYER_CLIENT]);
         }
-    }
 
-    // Optional: YouTube increasingly requires cookies to avoid bot checks.
-    if let Some(path) = cookies.as_deref() {
-        let path = path.trim();
-        if !path.is_empty() && std::path::Path::new(path).is_file() {
-            cmd.args(["--cookies", path]);
+        // Optional: YouTube increasingly requires a JS runtime for extraction.
+        // Example: WOPR_YTDLP_JS_RUNTIMES="deno:/Users/dev/local/bin/deno"
+        if let Some(v) = js_runtimes.as_deref() {
+            let v = v.trim();
+            if !v.is_empty() {
+                cmd.args(["--js-runtimes", v]);
+            }
         }
-    }
 
-    cmd.arg(url);
+        // Optional: YouTube increasingly requires cookies to avoid bot checks.
+        if let Some(path) = cookies.as_deref() {
+            let path = path.trim();
+            if !path.is_empty() && std::path::Path::new(path).is_file() {
+                cmd.args(["--cookies", path]);
+            }
+        }
 
-    let out = match timeout(YTDLP_RESOLVE_TIMEOUT, cmd.output()).await {
-        Ok(Ok(out)) => out,
-        Ok(Err(e)) => {
-            return Err(StreamResolveError {
-                user_message: "Could not start YouTube stream resolver.".to_string(),
-                technical_message: e.to_string(),
+        cmd.arg(url);
+
+        let out = match timeout(YTDLP_RESOLVE_TIMEOUT, cmd.output()).await {
+            Ok(Ok(out)) => out,
+            Ok(Err(e)) => {
+                return Err(StreamResolveError {
+                    user_message: "Could not start YouTube stream resolver.".to_string(),
+                    technical_message: e.to_string(),
+                    terminal: false,
+                });
+            }
+            Err(_) => {
+                return Err(StreamResolveError {
+                    user_message: "YouTube stream resolver timed out.".to_string(),
+                    technical_message: format!(
+                        "yt-dlp exceeded {}s",
+                        YTDLP_RESOLVE_TIMEOUT.as_secs()
+                    ),
+                    terminal: false,
+                });
+            }
+        };
+
+        if out.status.success() {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            let direct = stdout.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
+            if !direct.trim().is_empty() {
+                return Ok(direct.trim().to_string());
+            }
+            last_error = Some(StreamResolveError {
+                user_message: "YouTube did not return a playable stream URL.".to_string(),
+                technical_message: "empty yt-dlp output".to_string(),
                 terminal: false,
             });
+            continue;
         }
-        Err(_) => {
-            return Err(StreamResolveError {
-                user_message: "YouTube stream resolver timed out.".to_string(),
-                technical_message: format!("yt-dlp exceeded {}s", YTDLP_RESOLVE_TIMEOUT.as_secs()),
-                terminal: false,
-            });
-        }
-    };
-    if !out.status.success() {
+
         let stderr = String::from_utf8_lossy(&out.stderr);
-        return Err(classify_ytdlp_error(&stderr));
+        let err = classify_ytdlp_error(&stderr);
+        if err.terminal {
+            // Private/unavailable/age-restricted fail identically on every
+            // player client; don't burn a second resolve.
+            return Err(err);
+        }
+        if fast {
+            warn!("fast player client failed, falling back to default extraction");
+        }
+        last_error = Some(err);
     }
 
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    let direct = stdout.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
-    if !direct.trim().is_empty() {
-        return Ok(direct.trim().to_string());
-    }
-
-    Err(StreamResolveError {
+    Err(last_error.unwrap_or_else(|| StreamResolveError {
         user_message: "YouTube did not return a playable stream URL.".to_string(),
         technical_message: "empty yt-dlp output".to_string(),
         terminal: false,
-    })
+    }))
 }
 
 fn classify_ytdlp_error(stderr: &str) -> StreamResolveError {
@@ -1148,7 +1234,7 @@ async fn resolve_via_piped(http: &reqwest::Client, url: &str) -> anyhow::Result<
     Ok(best.url)
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SearchResult {
     title: String,
@@ -1156,6 +1242,8 @@ struct SearchResult {
     video_id: String,
     thumbnail: String,
     channel: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    duration: Option<f64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1164,63 +1252,224 @@ struct SearchQuery {
     token: Option<String>,
 }
 
+fn parse_search_line(line: &str) -> Option<SearchResult> {
+    let v = serde_json::from_str::<serde_json::Value>(line).ok()?;
+    let id = v.get("id").and_then(|x| x.as_str())?;
+    let title = v
+        .get("title")
+        .and_then(|x| x.as_str())
+        .unwrap_or("Unknown")
+        .to_string();
+    let channel = v
+        .get("channel")
+        .and_then(|x| x.as_str())
+        .or_else(|| v.get("uploader").and_then(|x| x.as_str()))
+        .unwrap_or("")
+        .to_string();
+    Some(SearchResult {
+        title,
+        url: format!("https://www.youtube.com/watch?v={}", id),
+        video_id: id.to_string(),
+        thumbnail: format!("https://i.ytimg.com/vi/{}/mqdefault.jpg", id),
+        channel,
+        duration: v.get("duration").and_then(|x| x.as_f64()),
+    })
+}
+
+async fn run_ytsearch(state: &AppState, search_arg: &str, limit: usize) -> Result<Vec<SearchResult>, StatusCode> {
+    let _permit = state.ytdlp_sem.acquire().await;
+
+    // The fast pinned player client speeds search up the same way it speeds
+    // resolves up; fall back to default extraction if it returns nothing.
+    for fast in [true, false] {
+        let mut cmd = ytdlp_command();
+        if fast {
+            cmd.args(["--extractor-args", FAST_PLAYER_CLIENT]);
+        }
+        cmd.args(["--flat-playlist", "--dump-json", search_arg]);
+        let output = match timeout(YTDLP_SEARCH_TIMEOUT, cmd.output()).await {
+            Ok(Ok(o)) => o,
+            Ok(Err(_)) => return Err(StatusCode::BAD_GATEWAY),
+            Err(_) => return Err(StatusCode::GATEWAY_TIMEOUT),
+        };
+        if !output.status.success() {
+            if fast {
+                continue;
+            }
+            return Err(StatusCode::BAD_GATEWAY);
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let results: Vec<SearchResult> = stdout
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .filter_map(parse_search_line)
+            .take(limit)
+            .collect();
+        if !results.is_empty() || !fast {
+            return Ok(results);
+        }
+    }
+    Ok(Vec::new())
+}
+
 async fn search(State(state): State<AppState>, headers: HeaderMap, Query(q): Query<SearchQuery>) -> impl IntoResponse {
     if !auth_ok(&headers, &state.bearer_token, q.token.as_deref()) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
-    let query = q.q.trim();
+    let query = q.q.trim().to_lowercase();
     if query.is_empty() {
         return (StatusCode::BAD_REQUEST, "Missing q").into_response();
     }
 
-    let mut cmd = ytdlp_command();
-    cmd.args(["--flat-playlist", "--dump-json", &format!("ytsearch10:{} music", query)]);
-    let output = match timeout(YTDLP_SEARCH_TIMEOUT, cmd.output()).await {
-        Ok(Ok(o)) => o,
-        Ok(Err(_)) => return StatusCode::BAD_GATEWAY.into_response(),
-        Err(_) => return (StatusCode::GATEWAY_TIMEOUT, "Search timed out.").into_response(),
-    };
-
-    if !output.status.success() {
-        return StatusCode::BAD_GATEWAY.into_response();
+    {
+        let mut cache = state.search_cache.lock().await;
+        let now = Instant::now();
+        cache.retain(|_, (cached_at, _)| now.duration_since(*cached_at) < SEARCH_CACHE_TTL);
+        if let Some((_, results)) = cache.get(&query) {
+            return Json(results.clone()).into_response();
+        }
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let mut results: Vec<SearchResult> = Vec::new();
-
-    for line in stdout.lines().filter(|l| !l.trim().is_empty()) {
-        if results.len() >= 10 {
-            break;
+    let results = match run_ytsearch(&state, &format!("ytsearch10:{} music", query), 10).await {
+        Ok(results) => results,
+        Err(StatusCode::GATEWAY_TIMEOUT) => {
+            return (StatusCode::GATEWAY_TIMEOUT, "Search timed out.").into_response()
         }
-        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else { continue };
-        let Some(id) = v.get("id").and_then(|x| x.as_str()) else { continue };
-        let title = v.get("title").and_then(|x| x.as_str()).unwrap_or("Unknown").to_string();
-        let channel = v.get("channel").and_then(|x| x.as_str())
-            .or_else(|| v.get("uploader").and_then(|x| x.as_str()))
-            .unwrap_or("")
-            .to_string();
-        let url = format!("https://www.youtube.com/watch?v={}", id);
-        let thumbnail = format!("https://i.ytimg.com/vi/{}/mqdefault.jpg", id);
-        results.push(SearchResult {
-            title,
-            url: url.clone(),
-            video_id: id.to_string(),
-            thumbnail,
-            channel,
+        Err(code) => return code.into_response(),
+    };
+
+    if !results.is_empty() {
+        let mut cache = state.search_cache.lock().await;
+        cache.insert(query, (Instant::now(), results.clone()));
+    }
+
+    Json(results).into_response()
+}
+
+#[derive(Debug, Deserialize)]
+struct SpotifyQueueQuery {
+    url: String,
+    token: Option<String>,
+    #[serde(default)]
+    max_tracks: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SpotifyQueueItem {
+    url: String,
+    video_id: String,
+    title: String,
+    thumbnail: String,
+    channel: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    duration: Option<f64>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SpotifyQueueResponse {
+    title: String,
+    thumbnail: String,
+    source_count: usize,
+    matched_count: usize,
+    items: Vec<SpotifyQueueItem>,
+}
+
+fn spotify_track_limit(requested: Option<usize>) -> usize {
+    let default = std::env::var("WOPR_SPOTIFY_MAX_TRACKS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(75);
+    requested.filter(|v| *v > 0).map_or(default, |v| v.min(default))
+}
+
+// Convert a Spotify playlist/album/track into a YouTube-backed queue. Track
+// searches run with bounded parallelism; individual misses are skipped rather
+// than failing the whole conversion.
+async fn spotify_queue(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<SpotifyQueueQuery>,
+) -> impl IntoResponse {
+    if !auth_ok(&headers, &state.bearer_token, q.token.as_deref()) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    if !spotify::is_spotify_url(&q.url) {
+        return (StatusCode::BAD_REQUEST, "Not a Spotify URL").into_response();
+    }
+
+    let source = match spotify::fetch_source(&state.http, &q.url).await {
+        Ok(source) => source,
+        Err(message) => {
+            error!("spotify fetch failed: {message}");
+            return (StatusCode::BAD_GATEWAY, message).into_response();
+        }
+    };
+
+    let limit = spotify_track_limit(q.max_tracks);
+    let source_count = source.tracks.len();
+    let tracks: Vec<spotify::TrackMeta> = source.tracks.into_iter().take(limit).collect();
+
+    let mut join_set: JoinSet<(usize, Option<SpotifyQueueItem>)> = JoinSet::new();
+    let match_sem = Arc::new(Semaphore::new(SPOTIFY_MATCH_CONCURRENCY));
+    for (index, track) in tracks.into_iter().enumerate() {
+        let state = state.clone();
+        let match_sem = match_sem.clone();
+        join_set.spawn(async move {
+            let _slot = match_sem.acquire().await;
+            let query = format!("ytsearch1:{}", track.search_query());
+            let item = match run_ytsearch(&state, &query, 1).await {
+                Ok(results) => results.into_iter().next().map(|r| SpotifyQueueItem {
+                    url: r.url,
+                    video_id: r.video_id,
+                    title: track.display_title(),
+                    thumbnail: r.thumbnail,
+                    channel: track.artist(),
+                    duration: r.duration,
+                }),
+                Err(_) => {
+                    warn!("spotify match search failed for {:?}; skipping", track.display_title());
+                    None
+                }
+            };
+            (index, item)
         });
     }
 
-    match serde_json::to_vec(&results) {
-        Ok(bytes) => {
-            let mut resp = Response::new(Body::from(bytes));
-            resp.headers_mut().insert(
-                header::CONTENT_TYPE,
-                HeaderValue::from_static("application/json; charset=utf-8"),
-            );
-            resp
+    let mut matched: Vec<(usize, SpotifyQueueItem)> = Vec::new();
+    while let Some(result) = join_set.join_next().await {
+        if let Ok((index, Some(item))) = result {
+            matched.push((index, item));
         }
-        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
+    matched.sort_by_key(|(index, _)| *index);
+    let items: Vec<SpotifyQueueItem> = matched.into_iter().map(|(_, item)| item).collect();
+
+    if items.is_empty() {
+        return (
+            StatusCode::BAD_GATEWAY,
+            "Could not find YouTube matches for this Spotify URL.",
+        )
+            .into_response();
+    }
+
+    let title = if source_count > limit {
+        format!("{} (first {} tracks)", source.title, limit)
+    } else {
+        source.title
+    };
+
+    Json(SpotifyQueueResponse {
+        title,
+        thumbnail: source.thumbnail,
+        source_count,
+        matched_count: items.len(),
+        items,
+    })
+    .into_response()
 }
 
 #[tokio::main]
@@ -1267,9 +1516,12 @@ async fn main() -> anyhow::Result<()> {
         stream_cache: Arc::new(Mutex::new(HashMap::new())),
         stream_failures: Arc::new(Mutex::new(HashMap::new())),
         stream_resolves: Arc::new(Mutex::new(HashMap::new())),
+        search_cache: Arc::new(Mutex::new(HashMap::new())),
+        ytdlp_sem: Arc::new(Semaphore::new(YTDLP_MAX_CONCURRENCY)),
         local_status: Arc::new(Mutex::new(None)),
         local_commands: Arc::new(Mutex::new(VecDeque::new())),
         next_local_command_id: Arc::new(Mutex::new(1)),
+        command_notify: Arc::new(Notify::new()),
     };
 
     let web_dir = find_web_dir();
@@ -1284,12 +1536,16 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/v1/local/commands", post(post_local_command))
         .route("/api/v1/local/commands/next", get(get_next_local_command))
         .route("/api/v1/search", get(search))
+        .route("/api/v1/spotify/queue", get(spotify_queue))
         .route("/api/v1/resolve", get(resolve_stream))
         .route("/api/v1/prewarm", get(prewarm_stream))
         .route("/api/v1/stream", get(stream_audio))
         .route("/api/v1/thumbnail", get(thumbnail_image))
         // Serve the stopgap web app from the same origin to avoid CORS hassles.
         .fallback_service(ServeDir::new(web_dir).append_index_html_on_directories(true))
+        // History/playlist PUTs are client-supplied JSON/YAML; cap them so a
+        // buggy or hostile client can't fill the disk.
+        .layer(DefaultBodyLimit::max(2 * 1024 * 1024))
         .with_state(state);
 
     let addr: SocketAddr = std::env::var("WOPR_BIND")
@@ -1303,4 +1559,125 @@ async fn main() -> anyhow::Result<()> {
         .context("server error")?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_range_headers() {
+        assert_eq!(parse_range_start_end(None), (0, None));
+        assert_eq!(parse_range_start_end(Some("bytes=0-")), (0, None));
+        assert_eq!(parse_range_start_end(Some("bytes=100-200")), (100, Some(200)));
+        assert_eq!(parse_range_start_end(Some("bytes=100-")), (100, None));
+        // Suffix and malformed ranges fall back to the start of the file.
+        assert_eq!(parse_range_start_end(Some("bytes=-500")), (0, None));
+        assert_eq!(parse_range_start_end(Some("garbage")), (0, None));
+        // Only the first range of a multi-range request is honored.
+        assert_eq!(parse_range_start_end(Some("bytes=5-9,20-30")), (5, Some(9)));
+    }
+
+    #[test]
+    fn extracts_youtube_ids() {
+        assert_eq!(
+            extract_youtube_id("https://www.youtube.com/watch?v=dQw4w9WgXcQ"),
+            Some("dQw4w9WgXcQ".to_string())
+        );
+        assert_eq!(
+            extract_youtube_id("https://youtu.be/dQw4w9WgXcQ"),
+            Some("dQw4w9WgXcQ".to_string())
+        );
+        assert_eq!(
+            extract_youtube_id("https://www.youtube.com/shorts/dQw4w9WgXcQ"),
+            Some("dQw4w9WgXcQ".to_string())
+        );
+        assert_eq!(extract_youtube_id("https://example.com/watch?v=dQw4w9WgXcQ"), None);
+        assert_eq!(extract_youtube_id("not a url"), None);
+    }
+
+    #[test]
+    fn classifies_ytdlp_errors() {
+        let terminal = classify_ytdlp_error("ERROR: Private video. Sign in.");
+        assert!(terminal.terminal);
+        assert_eq!(terminal.user_message, "This video is private and cannot be played.");
+
+        let transient = classify_ytdlp_error("ERROR: HTTP Error 429: Too Many Requests");
+        assert!(!transient.terminal);
+        assert_eq!(transient.user_message, "HTTP Error 429: Too Many Requests");
+
+        let unknown = classify_ytdlp_error("something exploded");
+        assert!(!unknown.terminal);
+        assert_eq!(unknown.user_message, "Could not resolve stream.");
+    }
+
+    #[test]
+    fn stream_url_ttl_honors_expire_param() {
+        // No expire param -> default 55 minutes.
+        assert_eq!(
+            cache_ttl_for_stream_url("https://example.com/audio"),
+            Duration::from_secs(55 * 60)
+        );
+
+        // Already-expired URL -> short 5 minute TTL.
+        let past = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            - 100;
+        assert_eq!(
+            cache_ttl_for_stream_url(&format!("https://example.com/audio?expire={past}")),
+            Duration::from_secs(5 * 60)
+        );
+
+        // Far-future expiry is clamped to 90 minutes.
+        let future = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            + 10 * 60 * 60;
+        assert_eq!(
+            cache_ttl_for_stream_url(&format!("https://example.com/audio?expire={future}")),
+            Duration::from_secs(90 * 60)
+        );
+    }
+
+    #[test]
+    fn parses_search_output_lines() {
+        let line = r#"{"id":"dQw4w9WgXcQ","title":"Song","channel":"Artist","duration":213.0}"#;
+        let result = parse_search_line(line).unwrap();
+        assert_eq!(result.video_id, "dQw4w9WgXcQ");
+        assert_eq!(result.url, "https://www.youtube.com/watch?v=dQw4w9WgXcQ");
+        assert_eq!(result.channel, "Artist");
+        assert_eq!(result.duration, Some(213.0));
+
+        assert!(parse_search_line("not json").is_none());
+        assert!(parse_search_line(r#"{"title":"no id"}"#).is_none());
+    }
+
+    #[test]
+    fn spotify_limit_respects_env_default_and_request() {
+        // Request below default is honored; zero/None falls back to default.
+        assert_eq!(spotify_track_limit(Some(10)), 10);
+        assert_eq!(spotify_track_limit(Some(0)), 75);
+        assert_eq!(spotify_track_limit(None), 75);
+        // Requests can't exceed the server-side ceiling.
+        assert_eq!(spotify_track_limit(Some(10_000)), 75);
+    }
+
+    #[test]
+    fn auth_accepts_header_or_query_token() {
+        let token = Some("secret".to_string());
+        let mut headers = HeaderMap::new();
+
+        assert!(!auth_ok(&headers, &token, None));
+        assert!(auth_ok(&headers, &token, Some("secret")));
+        assert!(!auth_ok(&headers, &token, Some("wrong")));
+
+        headers.insert(header::AUTHORIZATION, HeaderValue::from_static("Bearer secret"));
+        assert!(auth_ok(&headers, &token, None));
+
+        // No configured token -> open.
+        assert!(auth_ok(&HeaderMap::new(), &None, None));
+    }
 }

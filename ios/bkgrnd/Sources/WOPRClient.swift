@@ -29,8 +29,30 @@ actor WOPRClient {
 
   func streamURL(for sourceURL: URL) -> URL {
     var comps = URLComponents(url: config.baseURL.appendingPathComponent("/api/v1/stream"), resolvingAgainstBaseURL: false)!
-    comps.queryItems = [URLQueryItem(name: "url", value: sourceURL.absoluteString)]
+    // proxy=true is required off-network: without it the server 302s to the
+    // raw googlevideo URL, which is IP-locked to the server and 403s for us.
+    // The token query param rides along because AVPlayer's follow-up range
+    // requests don't reliably carry custom Authorization headers.
+    var items = [
+      URLQueryItem(name: "url", value: sourceURL.absoluteString),
+      URLQueryItem(name: "proxy", value: "true"),
+    ]
+    if let token = config.bearerToken, !token.isEmpty {
+      items.append(URLQueryItem(name: "token", value: token))
+    }
+    comps.queryItems = items
     return comps.url!
+  }
+
+  /// Ask the server to resolve (and cache) the stream URL ahead of playback
+  /// so the first range request is served without a cold yt-dlp resolve.
+  func prewarm(sourceURL: URL) async {
+    var comps = URLComponents(url: config.baseURL.appendingPathComponent("/api/v1/prewarm"), resolvingAgainstBaseURL: false)!
+    comps.queryItems = [URLQueryItem(name: "url", value: sourceURL.absoluteString)]
+    var req = URLRequest(url: comps.url!)
+    req.httpMethod = "GET"
+    addAuth(&req)
+    _ = try? await URLSession.shared.data(for: req)
   }
 
   func streamHeaders() -> [String: String] {

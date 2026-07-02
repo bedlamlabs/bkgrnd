@@ -156,42 +156,41 @@ async fn publish_status(client: &reqwest::Client, app_state: SharedState) {
         .await;
 }
 
-async fn poll_command(client: &reqwest::Client) -> Option<LocalPlaybackCommand> {
+// The server long-polls this endpoint (holds up to ~25s waiting for a
+// command), so the request needs a timeout comfortably above the hold window.
+async fn poll_command(client: &reqwest::Client) -> Result<Option<LocalPlaybackCommand>, ()> {
     let base = base_url();
     let url = format!("{}{}", base.trim_end_matches('/'), LOCAL_COMMAND_NEXT_PATH);
-    let resp = client.get(url).headers(auth_headers()).send().await.ok()?;
+    let resp = client
+        .get(url)
+        .headers(auth_headers())
+        .timeout(std::time::Duration::from_secs(35))
+        .send()
+        .await
+        .map_err(|_| ())?;
     if !resp.status().is_success() {
-        return None;
+        return Err(());
     }
     resp.json::<Option<LocalPlaybackCommand>>()
         .await
-        .ok()
-        .flatten()
+        .map_err(|_| ())
 }
 
-async fn control_once(client: &reqwest::Client, app: AppHandle, app_state: SharedState) {
-    publish_status(client, app_state.clone()).await;
-
-    let Some(command) = poll_command(client).await else {
-        return;
-    };
-
+async fn execute_command(command: LocalPlaybackCommand, app: AppHandle, app_state: SharedState) {
     match command.action.as_str() {
         "play" if !command.url.trim().is_empty() => {
             if is_allowed_play_url(&command.url) {
-                let _ = player::play(&command.url, app, app_state.clone()).await;
+                let _ = player::play(&command.url, app, app_state).await;
             }
         }
         "pause_toggle" => {
-            let _ = player::toggle_pause(app_state.clone()).await;
+            let _ = player::toggle_pause(app_state).await;
         }
         "stop" => {
-            let _ = player::stop(app_state.clone()).await;
+            let _ = player::stop(app_state).await;
         }
         _ => {}
     }
-
-    publish_status(client, app_state).await;
 }
 
 fn is_allowed_play_url(url: &str) -> bool {
@@ -215,19 +214,45 @@ pub async fn sync_loop(app: AppHandle, app_state: SharedState) {
         Err(_) => return,
     };
 
-    // Run immediately, then keep playlist sync and remote control heartbeats independent.
     sync_once().await;
-    control_once(&client, app.clone(), app_state.clone()).await;
 
-    let mut control_interval = tokio::time::interval(std::time::Duration::from_secs(2));
-    let mut control_ticks = 0u32;
-    loop {
-        control_interval.tick().await;
-        control_ticks = control_ticks.saturating_add(1);
-        control_once(&client, app.clone(), app_state.clone()).await;
-        if control_ticks >= 30 {
-            control_ticks = 0;
+    // Status heartbeat: the server marks the Mac offline after 15s without a
+    // status PUT, so publish on a fixed cadence independent of command polling.
+    {
+        let client = client.clone();
+        let state = app_state.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
+            loop {
+                interval.tick().await;
+                publish_status(&client, state.clone()).await;
+            }
+        });
+    }
+
+    // Playlist sync every 60s (unchanged cadence).
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+        loop {
+            interval.tick().await;
             sync_once().await;
+        }
+    });
+
+    // Command channel: long-poll continuously. The server holds each request
+    // until a command arrives (or ~25s passes), so phone taps land in
+    // sub-second time while idle traffic stays low.
+    loop {
+        match poll_command(&client).await {
+            Ok(Some(command)) => {
+                execute_command(command, app.clone(), app_state.clone()).await;
+                publish_status(&client, app_state.clone()).await;
+            }
+            Ok(None) => {} // hold window lapsed; re-poll immediately
+            Err(()) => {
+                // Server unreachable; back off so we don't hammer it.
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            }
         }
     }
 }
