@@ -771,25 +771,77 @@ async fn stream_audio(
     let is_hls = direct_url.contains("/manifest/")
         || direct_url.contains("hls_playlist")
         || direct_url.contains(".m3u8");
-    let mut req = state.http.get(direct_url.as_str());
     if is_hls {
+        let mut req = state.http.get(direct_url.as_str());
         if let Some(range) = headers.get(header::RANGE).and_then(|v| v.to_str().ok()) {
             req = req.header(header::RANGE, range);
         }
-    } else {
-        const PROXY_CHUNK: u64 = 8 * 1024 * 1024;
-        let (start, client_end) =
-            parse_range_start_end(headers.get(header::RANGE).and_then(|v| v.to_str().ok()));
-        // Only cap OPEN-ENDED ranges (those are what YouTube throttles).
-        // Explicit client ranges must be honored verbatim: AVPlayer treats a
-        // response shorter than the exact range it asked for as fatal
-        // (CoreMedia -12939 "content range mismatch").
-        let end = client_end.unwrap_or(start + PROXY_CHUNK - 1);
-        req = req.header(header::RANGE, format!("bytes={}-{}", start, end));
+        let upstream = match req.send().await {
+            Ok(r) => r,
+            Err(e) => {
+                error!("upstream fetch failed: {e}");
+                evict_stream_cache(&state, &q.url).await;
+                return StatusCode::BAD_GATEWAY.into_response();
+            }
+        };
+        if !(upstream.status().is_success() || upstream.status().as_u16() == 206) {
+            warn!(
+                "upstream returned {} for cached stream url; evicting cache entry",
+                upstream.status()
+            );
+            evict_stream_cache(&state, &q.url).await;
+            return StatusCode::BAD_GATEWAY.into_response();
+        }
+        let content_type = upstream
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("application/vnd.apple.mpegurl")
+            .to_string();
+        let status = upstream.status();
+        let mut resp = Response::builder()
+            .status(status)
+            .body(Body::from_stream(upstream.bytes_stream()))
+            .unwrap();
+        resp.headers_mut().insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_str(&content_type)
+                .unwrap_or(HeaderValue::from_static("application/vnd.apple.mpegurl")),
+        );
+        return resp;
     }
 
-    let upstream = match req.send().await {
-        Ok(r) => r,
+    // Progressive audio. Two YouTube realities collide here:
+    //   1. Large or open-ended ranges get throttled to ~playback speed
+    //      (measured: full-file range 31KB/s vs 8MB range 3.7MB/s).
+    //   2. AVPlayer treats a response shorter than the EXACT explicit range
+    //      it requested as fatal (CoreMedia -12939 "content range mismatch").
+    // So we advertise exactly the client's requested range, but fetch it
+    // upstream in bounded chunks and relay them sequentially.
+    const PROXY_CHUNK: u64 = 8 * 1024 * 1024;
+    let (start, client_end) =
+        parse_range_start_end(headers.get(header::RANGE).and_then(|v| v.to_str().ok()));
+
+    let first_end = match client_end {
+        Some(e) => e.min(start + PROXY_CHUNK - 1),
+        None => start + PROXY_CHUNK - 1,
+    };
+    let first = match state
+        .http
+        .get(direct_url.as_str())
+        .header(header::RANGE, format!("bytes={}-{}", start, first_end))
+        .send()
+        .await
+    {
+        Ok(r) if r.status().is_success() || r.status().as_u16() == 206 => r,
+        Ok(r) => {
+            warn!(
+                "upstream returned {} for cached stream url; evicting cache entry",
+                r.status()
+            );
+            evict_stream_cache(&state, &q.url).await;
+            return StatusCode::BAD_GATEWAY.into_response();
+        }
         Err(e) => {
             error!("upstream fetch failed: {e}");
             evict_stream_cache(&state, &q.url).await;
@@ -797,46 +849,131 @@ async fn stream_audio(
         }
     };
 
-    if !(upstream.status().is_success() || upstream.status().as_u16() == 206) {
-        // The cached googlevideo URL is dead (expired/revoked). Evict it so the
-        // client's next retry re-resolves instead of replaying the corpse for
-        // the rest of the cache TTL.
-        warn!(
-            "upstream returned {} for cached stream url; evicting cache entry",
-            upstream.status()
-        );
-        evict_stream_cache(&state, &q.url).await;
-        return StatusCode::BAD_GATEWAY.into_response();
-    }
-
-    // NOTE: no range support here; keep it simple.
-    let content_type = upstream
+    let content_type = first
         .headers()
         .get(header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
         .unwrap_or("audio/mpeg")
         .to_string();
+    let total = first
+        .headers()
+        .get(header::CONTENT_RANGE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(parse_content_range_total);
 
-    let status = upstream.status();
-    let content_length = upstream.headers().get(header::CONTENT_LENGTH).cloned();
-    let content_range = upstream.headers().get(header::CONTENT_RANGE).cloned();
+    match client_end {
+        // Explicit range wider than one chunk: relay it chunk by chunk while
+        // advertising the exact requested range.
+        Some(cend) if cend > first_end => {
+            let span = cend - start + 1;
+            let total_label = total.map(|t| t.to_string()).unwrap_or_else(|| "*".to_string());
+            let content_range = format!("bytes {}-{}/{}", start, cend, total_label);
 
-    let stream = upstream.bytes_stream();
-    let body = Body::from_stream(stream);
-    let mut resp = Response::builder().status(status).body(body).unwrap();
-    resp.headers_mut().insert(
-        header::CONTENT_TYPE,
-        HeaderValue::from_str(&content_type).unwrap_or(HeaderValue::from_static("audio/mpeg")),
-    );
-    resp.headers_mut()
-        .insert(header::ACCEPT_RANGES, HeaderValue::from_static("bytes"));
-    if let Some(v) = content_length {
-        resp.headers_mut().insert(header::CONTENT_LENGTH, v);
+            let (tx, rx) = tokio::sync::mpsc::channel::<Result<Bytes, std::io::Error>>(8);
+            let http = state.http.clone();
+            let upstream_url = direct_url.clone();
+            let cache = state.stream_cache.clone();
+            let source_key = q.url.clone();
+            tokio::spawn(async move {
+                use futures_util::StreamExt;
+                let mut current = Some(first);
+                let mut next_pos = first_end + 1;
+                'relay: while let Some(resp) = current.take() {
+                    let mut stream = resp.bytes_stream();
+                    while let Some(item) = stream.next().await {
+                        match item {
+                            Ok(bytes) => {
+                                if tx.send(Ok(bytes)).await.is_err() {
+                                    break 'relay; // client went away
+                                }
+                            }
+                            Err(e) => {
+                                let _ = tx
+                                    .send(Err(std::io::Error::new(std::io::ErrorKind::Other, e)))
+                                    .await;
+                                break 'relay;
+                            }
+                        }
+                    }
+                    if next_pos > cend {
+                        break;
+                    }
+                    let chunk_end = (next_pos + PROXY_CHUNK - 1).min(cend);
+                    match http
+                        .get(upstream_url.as_str())
+                        .header(header::RANGE, format!("bytes={}-{}", next_pos, chunk_end))
+                        .send()
+                        .await
+                    {
+                        Ok(r) if r.status().is_success() || r.status().as_u16() == 206 => {
+                            current = Some(r);
+                            next_pos = chunk_end + 1;
+                        }
+                        _ => {
+                            cache.lock().await.remove(&source_key);
+                            let _ = tx
+                                .send(Err(std::io::Error::new(
+                                    std::io::ErrorKind::Other,
+                                    "upstream chunk failed",
+                                )))
+                                .await;
+                            break;
+                        }
+                    }
+                }
+            });
+
+            let body = Body::from_stream(tokio_stream::wrappers::ReceiverStream::new(rx));
+            let mut resp = Response::builder()
+                .status(StatusCode::PARTIAL_CONTENT)
+                .body(body)
+                .unwrap();
+            resp.headers_mut().insert(
+                header::CONTENT_TYPE,
+                HeaderValue::from_str(&content_type)
+                    .unwrap_or(HeaderValue::from_static("audio/mpeg")),
+            );
+            resp.headers_mut()
+                .insert(header::ACCEPT_RANGES, HeaderValue::from_static("bytes"));
+            if let Ok(v) = HeaderValue::from_str(&span.to_string()) {
+                resp.headers_mut().insert(header::CONTENT_LENGTH, v);
+            }
+            if let Ok(v) = HeaderValue::from_str(&content_range) {
+                resp.headers_mut().insert(header::CONTENT_RANGE, v);
+            }
+            resp
+        }
+        // Small explicit range or open-ended: forward the first chunk's
+        // response as-is (open-ended clients pull follow-up ranges themselves).
+        _ => {
+            let status = first.status();
+            let content_length = first.headers().get(header::CONTENT_LENGTH).cloned();
+            let content_range = first.headers().get(header::CONTENT_RANGE).cloned();
+            let mut resp = Response::builder()
+                .status(status)
+                .body(Body::from_stream(first.bytes_stream()))
+                .unwrap();
+            resp.headers_mut().insert(
+                header::CONTENT_TYPE,
+                HeaderValue::from_str(&content_type)
+                    .unwrap_or(HeaderValue::from_static("audio/mpeg")),
+            );
+            resp.headers_mut()
+                .insert(header::ACCEPT_RANGES, HeaderValue::from_static("bytes"));
+            if let Some(v) = content_length {
+                resp.headers_mut().insert(header::CONTENT_LENGTH, v);
+            }
+            if let Some(v) = content_range {
+                resp.headers_mut().insert(header::CONTENT_RANGE, v);
+            }
+            resp
+        }
     }
-    if let Some(v) = content_range {
-        resp.headers_mut().insert(header::CONTENT_RANGE, v);
-    }
-    resp
+}
+
+/// Extract the total size from a Content-Range header ("bytes 0-99/1234").
+fn parse_content_range_total(value: &str) -> Option<u64> {
+    value.rsplit('/').next()?.trim().parse::<u64>().ok()
 }
 
 async fn evict_stream_cache(state: &AppState, url: &str) {
@@ -1656,6 +1793,13 @@ mod tests {
             cache_ttl_for_stream_url(&format!("https://example.com/audio?expire={future}")),
             Duration::from_secs(90 * 60)
         );
+    }
+
+    #[test]
+    fn parses_content_range_totals() {
+        assert_eq!(parse_content_range_total("bytes 0-99/1234"), Some(1234));
+        assert_eq!(parse_content_range_total("bytes 0-99/*"), None);
+        assert_eq!(parse_content_range_total("garbage"), None);
     }
 
     #[test]
