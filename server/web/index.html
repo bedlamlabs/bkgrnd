@@ -5,20 +5,22 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>Bkgrnd</title>
 
-    <meta name="theme-color" content="#08090d" />
+    <meta name="theme-color" content="#0d0e11" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-    <link rel="apple-touch-icon" sizes="180x180" href="assets/apple-touch-icon.png?v=23" />
+    <link rel="apple-touch-icon" sizes="180x180" href="assets/apple-touch-icon.png?v=24" />
 
-    <link rel="manifest" href="manifest.webmanifest?v=23" />
-    <link rel="stylesheet" href="styles.css?v=23" />
+    <link rel="manifest" href="manifest.webmanifest?v=24" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..900;1,9..144,300..900&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="styles.css?v=24" />
   </head>
   <body>
     <header class="topbar">
       <div class="brand-row">
-        <div class="brand-mark" aria-hidden="true"><span>b</span></div>
-        <div class="brand">Bkgrnd</div>
-        <button id="settingsBtn" class="settings-btn" type="button" aria-label="Settings">
+        <div class="brand"><i>b</i>kgrnd</div>
+        <button id="settingsBtn" class="icon-btn" type="button" aria-label="Settings">
           <svg viewBox="0 0 24 24" aria-hidden="true">
             <path d="M12 8.2a3.8 3.8 0 1 0 0 7.6 3.8 3.8 0 0 0 0-7.6Zm8.2 4.8a7.6 7.6 0 0 0 0-2l2-1.5-2-3.4-2.4 1a7.2 7.2 0 0 0-1.7-1l-.3-2.6h-4l-.4 2.6a7.2 7.2 0 0 0-1.7 1l-2.3-1-2 3.4 2 1.6a7.6 7.6 0 0 0 0 1.9l-2 1.5 2 3.4 2.3-1a7.2 7.2 0 0 0 1.7 1l.4 2.6h4l.3-2.6a7.2 7.2 0 0 0 1.7-1l2.4 1 2-3.4-2-1.5Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
           </svg>
@@ -27,16 +29,21 @@
     </header>
 
     <main id="homeView" class="screen active">
-      <section class="scope-row" aria-label="Playback scope">
-        <button id="remoteScopeBtn" class="pill active" type="button">Recent</button>
-        <button id="localScopeBtn" class="pill" type="button">
+      <section class="segment" aria-label="Playback scope">
+        <button id="remoteScopeBtn" class="seg-btn active" type="button">Recent</button>
+        <button id="localScopeBtn" class="seg-btn" type="button">
           Remote
           <span id="localActiveDot" class="scope-dot hidden" aria-hidden="true"></span>
         </button>
-        <button id="openSearchBtn" class="icon-btn search-btn" type="button" aria-label="Search or add">＋</button>
       </section>
 
+      <button id="openSearchBtn" class="searchrow" type="button">
+        <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="7" cy="7" r="4.4" stroke="currentColor" stroke-width="1.4"/><path d="m10.4 10.4 3 3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+        Search, or paste a YouTube / Spotify URL
+      </button>
+
       <section id="scopeStatus" class="scope-status hidden"></section>
+      <div class="section-label"><h2>Streams</h2></div>
       <section id="mixGrid" class="mix-grid" aria-live="polite"></section>
     </main>
 
@@ -50,11 +57,11 @@
         <div class="spacer"></div>
       </div>
       <div class="search-box">
-        <span aria-hidden="true">⌕</span>
+        <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="7" cy="7" r="4.4" stroke="currentColor" stroke-width="1.4"/><path d="m10.4 10.4 3 3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
         <input
           id="searchInput"
           type="text"
-          placeholder="Search or paste YouTube URL"
+          placeholder="Search, or paste a YouTube / Spotify URL"
           autocomplete="off"
           autocapitalize="none"
           spellcheck="false"
@@ -65,35 +72,55 @@
       <section id="searchResults" class="result-list"></section>
     </main>
 
-    <main id="playerView" class="screen player-screen">
-      <div class="view-bar">
-        <button id="closePlayerBtn" class="icon-btn" type="button" aria-label="Back">‹</button>
-        <div class="view-title">Now Playing <span id="playerStatusTag" class="status-tag hidden"></span></div>
-        <div class="spacer"></div>
-        <button id="shareBtn" class="icon-btn" type="button" aria-label="Share">↗</button>
+    <main id="playerView" class="screen stage">
+      <div class="stage-fill" id="playerAmbient" aria-hidden="true"></div>
+      <img id="playerArt" class="stage-art" alt="" />
+      <div id="playerArtFallback" class="stage-art-fallback hidden" aria-hidden="true">b</div>
+      <div class="stage-grain" aria-hidden="true"></div>
+
+      <div class="stage-inner">
+        <div class="stage-top">
+          <span class="chip"><span class="chip-dot" aria-hidden="true"></span><span id="playerStatusTag">streaming</span></span>
+          <div class="stage-actions">
+            <span id="stageQueueChip" class="chip hidden"></span>
+            <button id="shareBtn" class="ghost-icon" type="button" aria-label="Share">
+              <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 10V2.6M8 2.6 5.4 5.2M8 2.6l2.6 2.6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M3.4 8.6v3.6a1.2 1.2 0 0 0 1.2 1.2h6.8a1.2 1.2 0 0 0 1.2-1.2V8.6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+            </button>
+            <button id="closePlayerBtn" class="ghost-icon" type="button" aria-label="Browse streams">
+              <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><rect x="2.25" y="2.25" width="4.3" height="4.3" rx="1" stroke="currentColor" stroke-width="1.35"/><rect x="9.45" y="2.25" width="4.3" height="4.3" rx="1" stroke="currentColor" stroke-width="1.35"/><rect x="2.25" y="9.45" width="4.3" height="4.3" rx="1" stroke="currentColor" stroke-width="1.35"/><rect x="9.45" y="9.45" width="4.3" height="4.3" rx="1" stroke="currentColor" stroke-width="1.35"/></svg>
+            </button>
+          </div>
+        </div>
+
+        <div class="stage-copy">
+          <div id="stageKicker" class="stage-kicker"></div>
+          <h1 id="playerTitle" class="stage-title">Nothing playing</h1>
+          <p id="playerSub" class="stage-sub"></p>
+          <div class="stage-progress" aria-label="Playback progress">
+            <div class="rail" id="progressTrack">
+              <span class="rail-fill" id="progressFill"></span>
+              <span class="rail-knob" id="progressKnob"></span>
+            </div>
+            <div class="stage-times">
+              <span id="elapsedTime">0:00</span>
+              <span id="durationTime">--:--</span>
+            </div>
+          </div>
+          <div class="stage-controls">
+            <button id="playerStopBtn" class="s-btn quiet stop" type="button" aria-label="Stop">
+              <svg viewBox="0 0 18 18" fill="currentColor" aria-hidden="true"><rect x="5.3" y="5.3" width="7.4" height="7.4" rx="1.6"/></svg>
+            </button>
+            <button id="seekBackBtn" class="s-btn" type="button" aria-label="Back 15 seconds">
+              <svg viewBox="0 0 18 18" fill="none" aria-hidden="true"><path d="M10.4 4.2 5.8 9l4.6 4.8" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/><path d="M13 4.2 8.4 9l4.6 4.8" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+            <button id="playerPauseBtn" class="s-btn primary" type="button" aria-label="Pause">Ⅱ</button>
+            <button id="seekForwardBtn" class="s-btn" type="button" aria-label="Forward 15 seconds">
+              <svg viewBox="0 0 18 18" fill="none" aria-hidden="true"><path d="m7.6 4.2 4.6 4.8-4.6 4.8" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/><path d="m5 4.2 4.6 4.8L5 13.8" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+            <span class="s-btn spacer-btn" aria-hidden="true"></span>
+          </div>
+        </div>
       </div>
-      <section class="hero-player">
-        <img id="playerArt" class="player-art" alt="" />
-        <div id="playerArtFallback" class="art-fallback hidden" aria-hidden="true">b</div>
-        <h1 id="playerTitle">Nothing playing</h1>
-        <p id="playerSub"></p>
-        <div class="player-progress" aria-label="Playback progress">
-          <div class="progress-track" id="progressTrack">
-            <span class="progress-fill" id="progressFill"></span>
-            <span class="progress-knob" id="progressKnob"></span>
-          </div>
-          <div class="time-row">
-            <span id="elapsedTime">0:00</span>
-            <span id="durationTime">--:--</span>
-          </div>
-        </div>
-        <div class="controls">
-          <button id="seekBackBtn" class="circle-btn small" type="button" aria-label="Back 15 seconds">‹15</button>
-          <button id="playerStopBtn" class="circle-btn small" type="button" aria-label="Stop">■</button>
-          <button id="playerPauseBtn" class="circle-btn" type="button" aria-label="Pause">Ⅱ</button>
-          <button id="seekForwardBtn" class="circle-btn small" type="button" aria-label="Forward 15 seconds">15›</button>
-        </div>
-      </section>
     </main>
 
     <div id="miniPlayer" class="mini-player hidden" role="button" tabindex="0" aria-label="Open player">
@@ -121,6 +148,6 @@
     </dialog>
 
     <audio id="player" preload="none" playsinline></audio>
-    <script src="app.js?v=23"></script>
+    <script src="app.js?v=24"></script>
   </body>
 </html>

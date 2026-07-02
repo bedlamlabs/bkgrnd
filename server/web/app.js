@@ -31,6 +31,9 @@ const closePlayerBtn = el("closePlayerBtn");
 const shareBtn = el("shareBtn");
 const playerArt = el("playerArt");
 const playerArtFallback = el("playerArtFallback");
+const playerAmbient = el("playerAmbient");
+const stageKicker = el("stageKicker");
+const stageQueueChip = el("stageQueueChip");
 const playerTitle = el("playerTitle");
 const playerSub = el("playerSub");
 const playerStatusTag = el("playerStatusTag");
@@ -133,8 +136,11 @@ function setInline(node, text) {
 }
 
 function setPlayerStatus(text) {
-  const label = String(text || "").replace(/\.+$/, "").trim() || "";
-  setInline(playerStatusTag, label.toLowerCase());
+  // The stage status chip is always visible; fall back to the playback state
+  // when there's no transient message (resolving/buffering/errors).
+  const label = String(text || "").replace(/\.+$/, "").trim().toLowerCase();
+  const fallback = getCurrentNow() ? (isPaused() ? "paused" : "streaming") : "idle";
+  if (playerStatusTag) playerStatusTag.textContent = label || fallback;
 }
 
 function stopAcquisitionStatus() {
@@ -198,11 +204,15 @@ function escapeHtml(str) {
 function normalizeItem(raw) {
   const url = raw?.url || raw?.sourceUrl || "";
   const artist = bestSubtitle(raw);
+  const duration = Number(raw?.duration);
   return {
     title: raw?.title || url || "Untitled",
     url,
     channel: artist,
-    thumbnail: raw?.thumbnail || ytThumbFromUrl(url)
+    thumbnail: raw?.thumbnail || ytThumbFromUrl(url),
+    // Live 24/7 streams report tiny/zero durations; only chip real ones.
+    duration: Number.isFinite(duration) && duration > 60 ? duration : null,
+    live: raw?.type === "stream"
   };
 }
 
@@ -358,6 +368,15 @@ function renderGrid() {
   prewarmItems(items.slice(0, 6));
 }
 
+function formatDurationChip(seconds) {
+  const total = Math.floor(seconds);
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = String(total % 60).padStart(2, "0");
+  if (h > 0) return `${h}:${String(m).padStart(2, "0")}:${s}`;
+  return `${m}:${s}`;
+}
+
 function renderCard(item) {
   const button = document.createElement("button");
   button.className = "mix-card";
@@ -368,13 +387,20 @@ function renderCard(item) {
   artWrap.className = "mix-art-wrap";
   artWrap.appendChild(createArtwork(item.thumbnail));
   artWrap.insertAdjacentHTML("beforeend", `<div class="fallback-mark">b</div>`);
+  if (item.live) {
+    artWrap.insertAdjacentHTML("beforeend", `<span class="live-chip">LIVE</span>`);
+  } else if (item.duration) {
+    artWrap.insertAdjacentHTML(
+      "beforeend",
+      `<span class="dur-chip">${formatDurationChip(item.duration)}</span>`
+    );
+  }
 
   const body = document.createElement("div");
   body.className = "mix-body";
   body.innerHTML = `
     <div class="mix-title">${escapeHtml(item.title)}</div>
     ${item.channel ? `<div class="mix-channel">${escapeHtml(item.channel)}</div>` : ""}
-    <div class="mix-play">PLAY</div>
   `;
 
   button.appendChild(artWrap);
@@ -747,6 +773,36 @@ function renderMiniPlayer() {
   });
 }
 
+// The stage shows the sharp art dissolving into a blurred fill of itself.
+// Cards carry mqdefault; probe maxres directly (the thumbnail proxy would
+// mask 404s with its SVG fallback) and upgrade when it exists.
+let stageArtToken = 0;
+let lastStageArt = "";
+function setStageArt(src) {
+  if (src === lastStageArt) return;
+  lastStageArt = src;
+  const token = ++stageArtToken;
+  if (!src) {
+    playerAmbient.style.backgroundImage = "";
+    playerArt.removeAttribute("src");
+    return;
+  }
+  const proxied = thumbnailSrc(src);
+  playerAmbient.style.backgroundImage = `url(${JSON.stringify(proxied)})`;
+  playerArt.src = proxied;
+
+  const maxres = String(src).replace(/\/(?:default|mqdefault|hqdefault|sddefault)\.jpg(\?.*)?$/i, "/maxresdefault.jpg$1");
+  if (maxres === src) return;
+  const probe = new Image();
+  probe.onload = () => {
+    if (token !== stageArtToken || probe.naturalWidth <= 200) return;
+    const upgraded = thumbnailSrc(maxres);
+    playerArt.src = upgraded;
+    playerAmbient.style.backgroundImage = `url(${JSON.stringify(upgraded)})`;
+  };
+  probe.src = maxres;
+}
+
 function renderPlayer() {
   const current = getCurrentNow();
   if (!current) {
@@ -754,6 +810,9 @@ function renderPlayer() {
     playerSub.textContent = scopeLabel();
     playerArt.classList.add("hidden");
     playerArtFallback.classList.remove("hidden");
+    stageKicker.textContent = "";
+    stageQueueChip.classList.add("hidden");
+    setStageArt("");
     updateProgress();
     setPlayerStatus("");
     return;
@@ -763,7 +822,23 @@ function renderPlayer() {
   playerSub.textContent = current.channel || scopeLabel();
   playerArt.classList.toggle("hidden", !current.thumbnail);
   playerArtFallback.classList.toggle("hidden", Boolean(current.thumbnail));
-  if (current.thumbnail) playerArt.src = current.thumbnail;
+  setStageArt(current.thumbnail || "");
+
+  if (activeScope === "local") {
+    stageKicker.textContent = "Playing on the Mac";
+  } else if (remoteQueue.length > 1 && remoteQueueIndex >= 0) {
+    stageKicker.textContent = `No. ${remoteQueueIndex + 1} of ${remoteQueue.length}`;
+  } else {
+    stageKicker.textContent = current.live ? "Live stream" : "";
+  }
+
+  if (remoteQueue.length > 1 && activeScope !== "local") {
+    stageQueueChip.textContent = `Queue · ${remoteQueue.length}`;
+    stageQueueChip.classList.remove("hidden");
+  } else {
+    stageQueueChip.classList.add("hidden");
+  }
+
   playerPauseBtn.textContent = isPaused() ? "▶" : "Ⅱ";
   updateProgress();
 }
@@ -790,6 +865,7 @@ function updateProgress() {
   progressKnob.style.left = `${pct}%`;
   elapsedTime.textContent = formatDuration(position).replace("--:--", "0:00");
   durationTime.textContent = hasDuration ? formatDuration(duration) : "--:--";
+  miniPlayer.style.setProperty("--mini-progress", `${pct}%`);
 }
 
 function seekRelative(seconds) {
