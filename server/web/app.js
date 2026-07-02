@@ -338,7 +338,6 @@ function renderGrid() {
     activeScope,
     localState.online,
     localPlaying,
-    localStatus?.title || "",
     items.slice(0, 24).map((item) => item.url)
   ]);
   if (gridKey === lastGridKey) return;
@@ -346,11 +345,10 @@ function renderGrid() {
 
   localActiveDot.classList.toggle("hidden", !localPlaying);
 
+  // Now-playing lives in the mini player ribbon; the status row only
+  // surfaces actionable state (Mac unreachable).
   if (activeScope === "local" && !localState.online) {
     scopeStatus.textContent = "Mac is unavailable. Open bkgrnd on the Mac to enable Remote.";
-    scopeStatus.classList.remove("hidden");
-  } else if (activeScope === "local" && localPlaying) {
-    scopeStatus.textContent = `Playing on Mac: ${localStatus.title || "Untitled"}`;
     scopeStatus.classList.remove("hidden");
   } else {
     scopeStatus.classList.add("hidden");
