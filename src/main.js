@@ -53,6 +53,7 @@ const clearSearchBtn = document.getElementById('clearSearchBtn');
 // State
 let currentState = 'idle';
 let currentStatus = null;
+let lastActiveUrl = null;
 let gridOpen = true;
 let lastTitle = null;
 let failCount = 0;
@@ -102,7 +103,9 @@ function resizeToContent() {
     const visibleSurface = [playerPanel, gridView, offlineView]
       .find((surface) => !surface.classList.contains('hidden'));
     const measuredHeight = visibleSurface?.offsetHeight || appContainer?.offsetHeight || 178;
-    resizeWindow(Math.max(measuredHeight, 178) + 2);
+    // Clamp: set_size bypasses the window's maxHeight constraint, and the
+    // grid scrolls internally past this point.
+    resizeWindow(Math.min(Math.max(measuredHeight, 178), 598) + 2);
   });
 }
 
@@ -152,6 +155,12 @@ function applyStatus(status) {
     renderCompactNow();
     setControlsEnabled(true);
 
+    // Keep the grid's "Playing" pill in sync with the active stream.
+    if (status.sourceUrl !== lastActiveUrl) {
+      lastActiveUrl = status.sourceUrl;
+      renderLibrary();
+    }
+
     if (shouldOpenPlayer) {
       showPlayer();
     } else {
@@ -174,6 +183,7 @@ function applyStatus(status) {
 
   if (currentState !== 'idle') {
     lastTitle = null;
+    lastActiveUrl = null;
     invoke('set_tray_state', { state: 'idle' }).catch(() => {});
     fetchLibrary();
   }
@@ -332,22 +342,40 @@ function renderTile(item, { saved = false, search = false } = {}) {
   tile.tabIndex = 0;
   tile.title = item.title || 'Play';
 
-  if (currentStatus?.sourceUrl && item.url === currentStatus.sourceUrl) {
+  const isActive = Boolean(currentStatus?.sourceUrl && item.url === currentStatus.sourceUrl);
+  if (isActive) {
     tile.classList.add('active');
   }
 
   const thumb = document.createElement('div');
   thumb.className = 'stream-thumb';
   setCoverImage(thumb, item.thumbnail);
+  tile.appendChild(thumb);
+
+  if (isActive) {
+    const pill = document.createElement('span');
+    pill.className = 'active-pill';
+    pill.innerHTML = '<span class="pulse-dot"></span> Playing';
+    tile.appendChild(pill);
+  }
+
+  const copy = document.createElement('div');
+  copy.className = 'tile-copy';
+
+  const title = document.createElement('div');
+  title.className = 'tile-title';
+  title.textContent = item.title || 'Untitled';
 
   const ch = document.createElement('div');
   ch.className = 'tile-ch';
   ch.setAttribute('role', 'link');
   ch.tabIndex = 0;
-  ch.textContent = item.channel || item.title || '';
+  const meta = tileMetaLabel(item, { search });
+  ch.textContent = [item.channel, meta].filter(Boolean).join(' · ') || item.channel || '';
 
-  tile.appendChild(thumb);
-  tile.appendChild(ch);
+  copy.appendChild(title);
+  copy.appendChild(ch);
+  tile.appendChild(copy);
 
   const playTarget = search ? playUrlForSearchItem(item) : item.url;
   const play = () => playUrl(playTarget, item);

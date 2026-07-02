@@ -13,9 +13,9 @@
       {
         "title": "bkgrnd",
         "label": "main",
-        "width": 300,
+        "width": 356,
         "height": 200,
-        "minWidth": 300,
+        "minWidth": 356,
         "minHeight": 120,
         "maxHeight": 600,
         "resizable": false,

@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>bkgrnd · menubar — cleaned-up current design</title>
+<style>
+  /* ── Cleaned-up version of the shipping menubar UI ─────────────────────
+     Same bones (cover header + controls, meta strip, url row, stream grid,
+     compact-now) with tightened spacing, one control vocabulary, quieter
+     chrome, and a consistent 8pt rhythm. Native SF type on purpose — this
+     is a macOS popover. Real playlist data + real YouTube art. */
+  :root {
+    --popover: rgba(30, 32, 36, .78);
+    --panel: rgba(255,255,255,.045);
+    --stroke: rgba(255,255,255,.10);
+    --stroke-strong: rgba(255,255,255,.16);
+    --text: rgba(255,255,255,.95);
+    --muted: rgba(255,255,255,.55);
+    --muted-2: rgba(255,255,255,.38);
+    --accent: #6fb2ff;
+    --danger: #ff6a6a;
+    --radius: 14px;
+    --app-w: 356px;
+    --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 32px; min-height: 100vh;
+    font-family: var(--font); color: var(--text);
+    background:
+      radial-gradient(1000px 500px at 12% -10%, rgba(64, 88, 128, .38), transparent 60%),
+      radial-gradient(900px 500px at 88% 8%, rgba(96, 66, 88, .25), transparent 55%),
+      linear-gradient(180deg, #15171c, #0a0b0e 75%);
+  }
+  .page { max-width: 1220px; margin: 0 auto; }
+  .header { font-size: 13px; line-height: 1.5; color: rgba(255,255,255,.72); margin: 0 0 22px; max-width: 860px; }
+  .header b { color: #fff; }
+  .states { display: grid; grid-template-columns: repeat(3, minmax(var(--app-w), 1fr)); gap: 26px; align-items: start; }
+  .state-title { font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: rgba(255,255,255,.45); margin: 0 0 8px 2px; }
+  @media (max-width: 1180px) { .states { grid-template-columns: 1fr; } }
+
+  .app {
+    width: var(--app-w);
+    border-radius: var(--radius);
+    background: var(--popover);
+    border: 1px solid var(--stroke);
+    box-shadow: 0 26px 70px rgba(0,0,0,.45), 0 2px 14px rgba(0,0,0,.3);
+    overflow: hidden;
+    backdrop-filter: blur(30px) saturate(130%);
+    -webkit-backdrop-filter: blur(30px) saturate(130%);
+  }
+
+  /* ── Player panel ── */
+  .cover-stage { position: relative; aspect-ratio: 16/9; background-size: cover; background-position: center; }
+  .cover-stage::after {
+    content: ""; position: absolute; inset: 0;
+    background: linear-gradient(180deg, rgba(0,0,0,.20), transparent 34%, transparent 52%, rgba(0,0,0,.55) 100%);
+  }
+  .subtle-top { position: absolute; inset: 12px 12px auto; display: flex; justify-content: space-between; align-items: center; z-index: 2; }
+  .pill {
+    height: 25px; padding: 0 10px; display: inline-flex; gap: 6px; align-items: center;
+    border-radius: 999px; font-size: 11px; font-weight: 600; color: rgba(255,255,255,.78);
+    background: rgba(0,0,0,.30); border: 1px solid rgba(255,255,255,.14);
+    backdrop-filter: blur(14px);
+  }
+  .dot { width: 6px; height: 6px; border-radius: 50%; background: #9ff0b4; box-shadow: 0 0 0 3px rgba(159,240,180,.15); }
+  .ghost {
+    width: 27px; height: 27px; display: inline-flex; align-items: center; justify-content: center;
+    border-radius: 999px; border: 1px solid rgba(255,255,255,.14); background: rgba(0,0,0,.28);
+    color: rgba(255,255,255,.75); backdrop-filter: blur(14px);
+  }
+  .ghost svg { width: 13px; height: 13px; }
+  .cover-controls {
+    position: absolute; left: 0; right: 0; bottom: 12px; z-index: 2;
+    display: flex; justify-content: center; align-items: center; gap: 14px;
+  }
+  .control {
+    width: 34px; height: 34px; display: inline-flex; align-items: center; justify-content: center;
+    border-radius: 999px; border: 0; padding: 0; background: transparent; color: rgba(255,255,255,.88);
+  }
+  .control svg { width: 18px; height: 18px; }
+  .control.primary { width: 46px; height: 46px; background: #fff; color: #101014; box-shadow: 0 8px 22px rgba(0,0,0,.32); }
+  .control.primary svg { width: 20px; height: 20px; }
+  .control.stop { color: var(--danger); opacity: .85; }
+  .control.saved { color: var(--accent); }
+
+  .cover-meta { padding: 14px 16px 16px; }
+  .stream-title {
+    margin: 0 0 3px; font-size: 15px; font-weight: 700; letter-spacing: -.015em; line-height: 1.25;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+  }
+  .stream-subtitle { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .cover-progress { margin-top: 13px; }
+  .bar { height: 4px; border-radius: 99px; background: rgba(255,255,255,.16); position: relative; }
+  .bar .fill { display: block; height: 100%; border-radius: 99px; background: rgba(255,255,255,.9); }
+  .bar .knob { position: absolute; top: 50%; width: 12px; height: 12px; transform: translate(-50%, -50%); border-radius: 50%; background: #fff; box-shadow: 0 2px 6px rgba(0,0,0,.4); }
+  .time-row { display: flex; justify-content: space-between; margin-top: 8px; font-size: 11px; font-weight: 600; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+  /* ── Grid view ── */
+  .grid-body { padding: 12px 14px 14px; }
+  .compact-now {
+    width: 100%; display: grid; grid-template-columns: 46px 1fr auto; gap: 10px; align-items: center;
+    border: 1px solid var(--stroke); border-radius: 10px; background: var(--panel);
+    padding: 8px 10px 8px 8px; margin-bottom: 12px; text-align: left; color: inherit; font-family: inherit;
+  }
+  .compact-cover { width: 46px; height: 46px; border-radius: 7px; background-size: cover; background-position: center; }
+  .compact-kicker { font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); margin-bottom: 3px; }
+  .compact-title { font-size: 12.5px; font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 208px; }
+  .compact-runtime { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+  .url-row {
+    height: 36px; border-radius: 9px; border: 1px solid var(--stroke-strong);
+    background: rgba(255,255,255,.04); display: flex; align-items: center; gap: 8px;
+    padding: 0 6px 0 11px; margin-bottom: 14px;
+  }
+  .url-row svg.lead { width: 13px; height: 13px; color: var(--muted-2); flex: none; }
+  .url-row input { flex: 1; min-width: 0; background: transparent; border: 0; outline: 0; color: #fff; font: 600 12px var(--font); }
+  .url-row input::placeholder { color: var(--muted-2); }
+  .url-add {
+    width: 26px; height: 26px; border-radius: 7px; border: 0; display: inline-flex; align-items: center; justify-content: center;
+    background: rgba(255,255,255,.08); color: rgba(255,255,255,.65);
+  }
+  .url-add svg { width: 13px; height: 13px; }
+
+  .grid-meta { display: flex; justify-content: space-between; align-items: baseline; margin: 0 2px 9px; }
+  .grid-title { font-size: 12px; font-weight: 700; color: rgba(255,255,255,.82); }
+  .grid-note { font-size: 11px; color: var(--muted-2); }
+
+  .stream-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; }
+  .tile { border: 0; padding: 0; background: transparent; text-align: left; color: inherit; font-family: inherit; cursor: default; }
+  .thumb {
+    aspect-ratio: 16/10; border-radius: 9px; background-size: cover; background-position: center;
+    border: 1px solid var(--stroke); position: relative; overflow: hidden;
+  }
+  .tile.active .thumb { border-color: rgba(255,255,255,.55); box-shadow: 0 0 0 1px rgba(255,255,255,.28); }
+  .thumb .eq { position: absolute; left: 6px; bottom: 6px; display: flex; gap: 2px; align-items: flex-end; height: 10px; }
+  .eq i { width: 2.5px; background: #fff; border-radius: 2px; animation: eq 1s ease-in-out infinite; }
+  .eq i:nth-child(1) { height: 60%; animation-delay: -.2s; } .eq i:nth-child(2) { height: 100%; } .eq i:nth-child(3) { height: 45%; animation-delay: -.5s; }
+  @keyframes eq { 0%,100% { transform: scaleY(.5);} 50% { transform: scaleY(1);} }
+  .tile-title {
+    margin-top: 6px; font-size: 11px; font-weight: 620; line-height: 1.3; color: rgba(255,255,255,.85);
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+  }
+  .tile-sub { margin-top: 2px; font-size: 10px; color: var(--muted-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+</style>
+</head>
+<body>
+<div class="page">
+  <p class="header"><b>bkgrnd menubar — cleaned-up current design.</b> Same architecture as the shipping app (cover header · meta strip · search row · stream grid · compact now-playing), regularized: one 8-pt spacing scale, one pill/ghost/control vocabulary, 16:9 thumbnails shown honestly (no crop), two-line clamps everywhere, tabular numerals on times. Data and artwork are the real <i>Streams</i> playlist.</p>
+
+  <div class="states">
+    <section>
+      <div class="state-title">1 · Playing</div>
+      <div class="app">
+        <div class="cover-stage" style="background-image:url('https://i.ytimg.com/vi/Kr42vqlVSu0/maxresdefault.jpg')">
+          <div class="subtle-top">
+            <span class="pill"><span class="dot"></span> Playing</span>
+            <span class="ghost"><svg viewBox="0 0 16 16" fill="none"><rect x="2.25" y="2.25" width="4.3" height="4.3" rx="1" stroke="currentColor" stroke-width="1.35"/><rect x="9.45" y="2.25" width="4.3" height="4.3" rx="1" stroke="currentColor" stroke-width="1.35"/><rect x="2.25" y="9.45" width="4.3" height="4.3" rx="1" stroke="currentColor" stroke-width="1.35"/><rect x="9.45" y="9.45" width="4.3" height="4.3" rx="1" stroke="currentColor" stroke-width="1.35"/></svg></span>
+          </div>
+          <div class="cover-controls">
+            <button class="control saved"><svg viewBox="0 0 18 18" fill="currentColor"><path d="M5 3.2h8a.8.8 0 0 1 .8.8v10.55L9 11.6l-4.8 2.95V4A.8.8 0 0 1 5 3.2Z"/></svg></button>
+            <button class="control"><svg viewBox="0 0 18 18" fill="none"><path d="M10.4 4.2 5.8 9l4.6 4.8" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/><path d="M13 4.2 8.4 9l4.6 4.8" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+            <button class="control primary"><svg viewBox="0 0 18 18" fill="currentColor"><rect x="5" y="4" width="3" height="10" rx=".8"/><rect x="10" y="4" width="3" height="10" rx=".8"/></svg></button>
+            <button class="control"><svg viewBox="0 0 18 18" fill="none"><path d="m7.6 4.2 4.6 4.8-4.6 4.8" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/><path d="m5 4.2 4.6 4.8L5 13.8" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+            <button class="control stop"><svg viewBox="0 0 18 18" fill="currentColor"><rect x="5.3" y="5.3" width="7.4" height="7.4" rx="1.6"/></svg></button>
+          </div>
+        </div>
+        <div class="cover-meta">
+          <h1 class="stream-title">California Sunscapes 2025 · Chillout Deep House Mix</h1>
+          <div class="stream-subtitle">AEVE DEEP</div>
+          <div class="cover-progress">
+            <div class="bar"><span class="fill" style="width:37%"></span><span class="knob" style="left:37%"></span></div>
+            <div class="time-row"><span>1:42:18</span><span>4:37:50</span></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="state-title">2 · Library while playing</div>
+      <div class="app">
+        <div class="grid-body">
+          <button class="compact-now">
+            <span class="compact-cover" style="background-image:url('https://i.ytimg.com/vi/Kr42vqlVSu0/mqdefault.jpg')"></span>
+            <span>
+              <span class="compact-kicker">Now playing</span>
+              <span class="compact-title">California Sunscapes 2025 · Chillout Deep House</span>
+            </span>
+            <span class="compact-runtime">1:42:18</span>
+          </button>
+
+          <div class="url-row">
+            <svg class="lead" viewBox="0 0 16 16" fill="none"><circle cx="7" cy="7" r="4.4" stroke="currentColor" stroke-width="1.4"/><path d="m10.4 10.4 3 3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+            <input placeholder="Search or paste a URL" />
+            <button class="url-add"><svg viewBox="0 0 16 16" fill="none"><path d="M3 8h8.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="m8.5 4 3.5 4-3.5 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+          </div>
+
+          <div class="grid-meta"><div class="grid-title">Streams</div><div class="grid-note">8 saved</div></div>
+          <div class="stream-grid">
+            <div class="tile active">
+              <div class="thumb" style="background-image:url('https://i.ytimg.com/vi/Kr42vqlVSu0/mqdefault.jpg')"><span class="eq"><i></i><i></i><i></i></span></div>
+              <div class="tile-title">California Sunscapes 2025</div><div class="tile-sub">AEVE DEEP</div>
+            </div>
+            <div class="tile">
+              <div class="thumb" style="background-image:url('https://i.ytimg.com/vi/Lcdi9O2XB4E/mqdefault.jpg')"></div>
+              <div class="tile-title">tokyo night drive · lofi</div><div class="tile-sub">TOKYO TONES</div>
+            </div>
+            <div class="tile">
+              <div class="thumb" style="background-image:url('https://i.ytimg.com/vi/GILLWpsm7y4/mqdefault.jpg')"></div>
+              <div class="tile-title">LOST IN JAPAN 24/7</div><div class="tile-sub">TOKYO TONES</div>
+            </div>
+            <div class="tile">
+              <div class="thumb" style="background-image:url('https://i.ytimg.com/vi/J9aEIYkiOtQ/mqdefault.jpg')"></div>
+              <div class="tile-title">DEEP Chill Out Lounge Mix</div><div class="tile-sub">ChillCafé</div>
+            </div>
+            <div class="tile">
+              <div class="thumb" style="background-image:url('https://i.ytimg.com/vi/VHpLQYtjikQ/mqdefault.jpg')"></div>
+              <div class="tile-title">Sunday Morning Jazz</div><div class="tile-sub">Relax Cafe Music</div>
+            </div>
+            <div class="tile">
+              <div class="thumb" style="background-image:url('https://i.ytimg.com/vi/VjLWlWKoiZ8/mqdefault.jpg')"></div>
+              <div class="tile-title">Café del Mar Sunset Calm</div><div class="tile-sub">AEVE DEEP</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="state-title">3 · Idle</div>
+      <div class="app">
+        <div class="grid-body">
+          <div class="url-row" style="margin-top:2px">
+            <svg class="lead" viewBox="0 0 16 16" fill="none"><circle cx="7" cy="7" r="4.4" stroke="currentColor" stroke-width="1.4"/><path d="m10.4 10.4 3 3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+            <input placeholder="Search or paste a URL" autofocus />
+            <button class="url-add"><svg viewBox="0 0 16 16" fill="none"><path d="M3 8h8.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="m8.5 4 3.5 4-3.5 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+          </div>
+          <div class="grid-meta"><div class="grid-title">Streams</div><div class="grid-note">8 saved</div></div>
+          <div class="stream-grid">
+            <div class="tile"><div class="thumb" style="background-image:url('https://i.ytimg.com/vi/Lcdi9O2XB4E/mqdefault.jpg')"></div><div class="tile-title">tokyo night drive · lofi</div><div class="tile-sub">TOKYO TONES</div></div>
+            <div class="tile"><div class="thumb" style="background-image:url('https://i.ytimg.com/vi/Kr42vqlVSu0/mqdefault.jpg')"></div><div class="tile-title">California Sunscapes 2025</div><div class="tile-sub">AEVE DEEP</div></div>
+            <div class="tile"><div class="thumb" style="background-image:url('https://i.ytimg.com/vi/GILLWpsm7y4/mqdefault.jpg')"></div><div class="tile-title">LOST IN JAPAN 24/7</div><div class="tile-sub">TOKYO TONES</div></div>
+            <div class="tile"><div class="thumb" style="background-image:url('https://i.ytimg.com/vi/J9aEIYkiOtQ/mqdefault.jpg')"></div><div class="tile-title">DEEP Chill Out Lounge Mix</div><div class="tile-sub">ChillCafé</div></div>
+            <div class="tile"><div class="thumb" style="background-image:url('https://i.ytimg.com/vi/VHpLQYtjikQ/mqdefault.jpg')"></div><div class="tile-title">Sunday Morning Jazz</div><div class="tile-sub">Relax Cafe Music</div></div>
+            <div class="tile"><div class="thumb" style="background-image:url('https://i.ytimg.com/vi/KNQ-9uEclWA/mqdefault.jpg')"></div><div class="tile-title">Deep Relaxation · 15 hrs</div><div class="tile-sub">Relax My Dog</div></div>
+            <div class="tile"><div class="thumb" style="background-image:url('https://i.ytimg.com/vi/hbe3CQamF8k/mqdefault.jpg')"></div><div class="tile-title">Massive Attack — Angel</div><div class="tile-sub">5:24</div></div>
+            <div class="tile"><div class="thumb" style="background-image:url('https://i.ytimg.com/vi/VjLWlWKoiZ8/mqdefault.jpg')"></div><div class="tile-title">Café del Mar Sunset Calm</div><div class="tile-sub">AEVE DEEP</div></div>
+            <div class="tile"><div class="thumb" style="display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,.03);color:var(--muted-2);font-size:18px">＋</div><div class="tile-title" style="color:var(--muted-2)">Add a stream</div><div class="tile-sub">&nbsp;</div></div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </div>
+</div>
+</body>
+</html>

@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>bkgrnd · app — final direction (clean browse + Marquee stage)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..900;1,9..144,300..900&family=Archivo:wght@400..800&display=swap" rel="stylesheet">
+<style>
+  /* ── Final direction for the iOS app ───────────────────────────────────
+     Browse  = the cleaned-up PWA home (segmented Recent/Remote, card grid,
+               mini player).
+     Playing = the Marquee “stage” (art dissolves into background, serif
+               title, brass accent) + the 4-square playlist/browse ghost
+               icon from the menubar in the top row.
+     Real Streams playlist data + art. */
+  :root {
+    --bg: #0d0e11;
+    --card: #17181d;
+    --stroke: rgba(255,255,255,.08);
+    --text: rgba(255,255,255,.94);
+    --muted: rgba(255,255,255,.55);
+    --muted-2: rgba(255,255,255,.36);
+    --coral: #ee6d74;
+    --brass: #d8a75b;
+    --paper: rgba(255,255,255,.93);
+    --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+    --serif: "Fraunces", Georgia, serif;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 32px; min-height: 100vh; font-family: var(--font); color: var(--text);
+    background:
+      radial-gradient(900px 480px at 15% -8%, rgba(238,109,116,.09), transparent 55%),
+      radial-gradient(800px 480px at 90% 5%, rgba(216,167,91,.08), transparent 55%),
+      linear-gradient(180deg, #14161a, #0a0b0d 70%);
+  }
+  .page { max-width: 1300px; margin: 0 auto; }
+  .header { font-size: 13px; line-height: 1.5; color: rgba(255,255,255,.72); margin: 0 0 24px; max-width: 900px; }
+  .header b { color: #fff; }
+  .states { display: flex; gap: 30px; flex-wrap: wrap; align-items: flex-start; }
+  .state-title { font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: rgba(255,255,255,.45); margin: 0 0 10px 4px; }
+
+  .phone {
+    width: 375px; height: 812px; border-radius: 44px; position: relative; overflow: hidden;
+    background: var(--bg); border: 1px solid rgba(255,255,255,.14);
+    box-shadow: 0 34px 90px rgba(0,0,0,.55), inset 0 0 0 6px #000;
+  }
+  .screen { position: absolute; inset: 6px; border-radius: 38px; overflow: hidden; display: flex; flex-direction: column; background: var(--bg); }
+  .statusbar { height: 44px; flex: none; display: flex; align-items: center; justify-content: space-between; padding: 0 26px; font-size: 13px; font-weight: 650; z-index: 6; }
+  .home-indicator { position: absolute; bottom: 8px; left: 50%; transform: translateX(-50%); width: 128px; height: 5px; border-radius: 3px; background: rgba(255,255,255,.28); z-index: 9; }
+
+  /* ── Browse (clean home) ── */
+  .topbar { padding: 6px 20px 12px; display: flex; align-items: center; justify-content: space-between; }
+  .wordmark { font-size: 21px; font-weight: 800; letter-spacing: -.03em; }
+  .wordmark i { color: var(--coral); font-style: normal; }
+  .iconbtn { width: 34px; height: 34px; border-radius: 999px; border: 1px solid var(--stroke); background: var(--card); color: var(--muted); display: inline-flex; align-items: center; justify-content: center; }
+  .iconbtn svg { width: 15px; height: 15px; }
+  .segment { margin: 0 20px 14px; height: 38px; border-radius: 12px; background: var(--card); border: 1px solid var(--stroke); display: grid; grid-template-columns: 1fr 1fr; padding: 3px; }
+  .segment button { border: 0; border-radius: 9px; background: transparent; color: var(--muted); font: 650 13px var(--font); }
+  .segment button.active { background: rgba(255,255,255,.10); color: #fff; }
+  .segment .dot-live { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: #7fe0a0; margin-left: 6px; }
+  .searchrow { margin: 0 20px 18px; height: 40px; border-radius: 12px; border: 1px solid var(--stroke); background: var(--card); display: flex; align-items: center; gap: 9px; padding: 0 13px; color: var(--muted-2); font-size: 13.5px; font-weight: 550; }
+  .searchrow svg { width: 14px; height: 14px; flex: none; }
+  .scroll { flex: 1; overflow: hidden; padding: 0 20px; }
+  .section-label { display: flex; justify-content: space-between; align-items: baseline; margin: 0 0 10px; }
+  .section-label h2 { margin: 0; font-size: 16px; font-weight: 750; letter-spacing: -.02em; }
+  .section-label span { font-size: 12px; color: var(--muted-2); }
+  .mix-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 13px; }
+  .mix-card { border-radius: 14px; overflow: hidden; background: var(--card); border: 1px solid var(--stroke); }
+  .mix-art { aspect-ratio: 16/9; background-size: cover; background-position: center; position: relative; }
+  .live-chip { position: absolute; top: 7px; left: 7px; height: 18px; padding: 0 6px; display: inline-flex; align-items: center; border-radius: 5px; background: rgba(0,0,0,.55); color: #ffb3b3; font-size: 9px; font-weight: 800; letter-spacing: .06em; }
+  .dur-chip { position: absolute; bottom: 7px; right: 7px; height: 18px; padding: 0 6px; display: inline-flex; align-items: center; border-radius: 5px; background: rgba(0,0,0,.55); color: rgba(255,255,255,.85); font-size: 10px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .mix-body { padding: 9px 11px 11px; }
+  .mix-title { font-size: 12.5px; font-weight: 650; line-height: 1.3; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; min-height: 32px; }
+  .mix-channel { margin-top: 3px; font-size: 11px; color: var(--muted-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .mini {
+    position: absolute; left: 12px; right: 12px; bottom: 24px; height: 60px; z-index: 8;
+    border-radius: 16px; background: rgba(34,36,42,.92); border: 1px solid rgba(255,255,255,.12);
+    backdrop-filter: blur(24px); display: grid; grid-template-columns: 44px 1fr 34px 34px; gap: 11px;
+    align-items: center; padding: 0 12px 0 8px; box-shadow: 0 14px 34px rgba(0,0,0,.45); overflow: hidden;
+  }
+  .mini::after { content: ""; position: absolute; left: 8px; right: 8px; bottom: 0; height: 2px; border-radius: 2px; background: linear-gradient(90deg, var(--brass) 37%, rgba(255,255,255,.14) 37%); }
+  .mini-art { width: 44px; height: 44px; border-radius: 10px; background-size: cover; background-position: center; }
+  .mini-title { font-size: 12.5px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .mini-sub { margin-top: 2px; font-size: 11px; color: var(--muted); }
+  .mini-btn { width: 34px; height: 34px; border-radius: 999px; border: 0; background: transparent; color: #fff; display: inline-flex; align-items: center; justify-content: center; }
+  .mini-btn svg { width: 17px; height: 17px; }
+
+  /* ── Stage (Marquee now playing) ── */
+  .grain { position: absolute; inset: 0; z-index: 7; pointer-events: none; opacity: .5; mix-blend-mode: overlay;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 .35 0'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)'/%3E%3C/svg%3E");
+  }
+  .stage { position: absolute; inset: 0; }
+  .stage .fill { position: absolute; inset: -40px; background-size: cover; background-position: center; filter: blur(52px) saturate(150%) brightness(.5); transform: scale(1.3); }
+  .stage .art { position: absolute; inset: 0; background-size: cover; background-position: center 25%; mask-image: linear-gradient(180deg, black 42%, transparent 78%); -webkit-mask-image: linear-gradient(180deg, black 42%, transparent 78%); }
+  .stage::before { content: ""; position: absolute; inset: 0; background: linear-gradient(180deg, rgba(8,7,10,.25), transparent 26%, rgba(8,7,10,.42) 60%, rgba(8,7,10,.94) 100%); }
+  .stage-inner { position: absolute; inset: 0; z-index: 3; display: flex; flex-direction: column; padding: 54px 26px 32px; }
+  .stage-top { display: flex; justify-content: space-between; align-items: center; }
+  .chip { height: 26px; padding: 0 10px; border-radius: 999px; display: inline-flex; align-items: center; gap: 6px; background: rgba(0,0,0,.3); border: 1px solid rgba(255,255,255,.16); font-size: 10px; font-weight: 750; letter-spacing: .14em; text-transform: uppercase; color: rgba(255,255,255,.8); backdrop-filter: blur(12px); }
+  .chip .dot { width: 5px; height: 5px; border-radius: 50%; background: #98e8ae; }
+  .stage-actions { display: flex; gap: 8px; }
+  .ghost-icon { width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center; border-radius: 999px; color: rgba(255,255,255,.75); background: rgba(0,0,0,.28); border: 1px solid rgba(255,255,255,.14); backdrop-filter: blur(14px); padding: 0; }
+  .ghost-icon svg { width: 14px; height: 14px; }
+  .stage-copy { margin-top: auto; }
+  .stage-no { font-family: var(--serif); font-style: italic; font-size: 15px; color: var(--brass); }
+  .stage-title { margin: 8px 0 10px; font-family: var(--serif); font-weight: 540; font-size: 38px; line-height: 1.0; letter-spacing: -.022em; text-shadow: 0 4px 34px rgba(0,0,0,.6); }
+  .stage-sub { font-size: 12px; font-weight: 700; letter-spacing: .16em; text-transform: uppercase; color: rgba(255,255,255,.62); }
+  .stage-progress { margin: 26px 0 0; }
+  .rail { height: 3px; background: rgba(255,255,255,.22); border-radius: 99px; position: relative; }
+  .rail .fill2 { display: block; height: 100%; width: 37%; background: var(--brass); border-radius: 99px; }
+  .rail .knob { position: absolute; left: 37%; top: 50%; transform: translate(-50%,-50%); width: 13px; height: 13px; border-radius: 50%; background: var(--brass); box-shadow: 0 0 0 4px rgba(216,167,91,.22); }
+  .stage-times { display: flex; justify-content: space-between; margin-top: 10px; font-size: 11.5px; font-weight: 650; color: rgba(255,255,255,.6); font-variant-numeric: tabular-nums; }
+  .stage-controls { display: flex; align-items: center; justify-content: space-between; margin-top: 22px; }
+  .s-btn { width: 46px; height: 46px; border-radius: 999px; border: 1px solid rgba(255,255,255,.18); background: rgba(255,255,255,.05); color: rgba(255,255,255,.88); display: inline-flex; align-items: center; justify-content: center; backdrop-filter: blur(10px); }
+  .s-btn svg { width: 19px; height: 19px; }
+  .s-btn.primary { width: 72px; height: 72px; background: var(--paper); color: #16131a; border: 0; box-shadow: 0 16px 40px rgba(0,0,0,.5); }
+  .s-btn.primary svg { width: 28px; height: 28px; }
+  .s-btn.quiet { border-color: transparent; background: transparent; color: rgba(255,255,255,.55); }
+
+  /* ── Minimized states: Dynamic Island / notch ── */
+  .island-col { width: 375px; display: flex; flex-direction: column; gap: 22px; }
+  .island-panel {
+    border-radius: 24px; border: 1px solid rgba(255,255,255,.10); background: #0c0d10;
+    padding: 18px; box-shadow: 0 20px 50px rgba(0,0,0,.45);
+  }
+  .island-label { font-size: 10.5px; letter-spacing: .12em; text-transform: uppercase; color: rgba(255,255,255,.4); margin-bottom: 12px; }
+  .island {
+    margin: 0 auto; height: 37px; width: 126px; border-radius: 22px; background: #000;
+    display: flex; align-items: center; justify-content: space-between; padding: 0 9px;
+    box-shadow: 0 0 0 1px rgba(255,255,255,.06);
+  }
+  .island.wide { width: 232px; }
+  .island-art { width: 23px; height: 23px; border-radius: 6px; background-size: cover; background-position: center; }
+  .island-eq { display: flex; gap: 2.5px; align-items: flex-end; height: 14px; }
+  .island-eq i { width: 3px; border-radius: 2px; background: var(--brass); animation: ieq 1s ease-in-out infinite; }
+  .island-eq i:nth-child(1) { height: 55%; animation-delay: -.15s; }
+  .island-eq i:nth-child(2) { height: 100%; }
+  .island-eq i:nth-child(3) { height: 40%; animation-delay: -.45s; }
+  .island-eq i:nth-child(4) { height: 75%; animation-delay: -.3s; }
+  @keyframes ieq { 0%,100% { transform: scaleY(.45);} 50% { transform: scaleY(1);} }
+  .island-title-mini { flex: 1; margin: 0 9px; font-size: 10.5px; font-weight: 650; color: rgba(255,255,255,.75); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .island-expanded {
+    margin: 14px auto 0; width: 348px; border-radius: 38px; background: #000; padding: 16px 18px;
+    box-shadow: 0 0 0 1px rgba(255,255,255,.07), 0 18px 44px rgba(0,0,0,.5);
+  }
+  .ie-row { display: grid; grid-template-columns: 52px 1fr 30px; gap: 12px; align-items: center; }
+  .ie-art { width: 52px; height: 52px; border-radius: 12px; background-size: cover; background-position: center; }
+  .ie-title { font-size: 14px; font-weight: 720; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ie-sub { margin-top: 2px; font-size: 11.5px; color: rgba(255,255,255,.5); }
+  .ie-rail { height: 4px; border-radius: 99px; background: rgba(255,255,255,.16); margin: 14px 2px 6px; position: relative; }
+  .ie-rail span { display: block; height: 100%; width: 37%; border-radius: 99px; background: var(--brass); }
+  .ie-times { display: flex; justify-content: space-between; font-size: 10px; font-weight: 650; color: rgba(255,255,255,.45); font-variant-numeric: tabular-nums; margin: 0 2px; }
+  .ie-controls { display: flex; justify-content: center; align-items: center; gap: 34px; margin-top: 10px; }
+  .ie-btn { border: 0; background: transparent; color: #fff; width: 38px; height: 38px; display: inline-flex; align-items: center; justify-content: center; padding: 0; }
+  .ie-btn svg { width: 22px; height: 22px; }
+  .island-note { margin-top: 14px; font-size: 11.5px; line-height: 1.55; color: rgba(255,255,255,.5); }
+  .island-note b { color: rgba(255,255,255,.78); }
+</style>
+</head>
+<body>
+<div class="page">
+  <p class="header"><b>bkgrnd app — final direction.</b> Browse keeps the cleaned-up PWA home (segmented Recent/Remote · search · card grid · mini player). Now-playing adopts the Marquee stage, with the menubar's 4-square playlist/browse ghost icon added top-right — tap it to drop back to the grid. Real playlist data + art.</p>
+
+  <div class="states">
+    <section>
+      <div class="state-title">1 · Browse (clean home)</div>
+      <div class="phone"><div class="screen">
+        <div class="statusbar"><span>21:47</span><span>􀙇 􀖀 􀋨</span></div>
+        <div class="topbar">
+          <div class="wordmark"><i>b</i>kgrnd</div>
+          <button class="iconbtn"><svg viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="2.6" stroke="currentColor" stroke-width="1.4"/><path d="M8 1.8v2M8 12.2v2M1.8 8h2M12.2 8h2M3.6 3.6l1.4 1.4M11 11l1.4 1.4M12.4 3.6 11 5M5 11l-1.4 1.4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg></button>
+        </div>
+        <div class="segment">
+          <button class="active">Recent</button>
+          <button>Remote<span class="dot-live"></span></button>
+        </div>
+        <div class="searchrow">
+          <svg viewBox="0 0 16 16" fill="none"><circle cx="7" cy="7" r="4.4" stroke="currentColor" stroke-width="1.4"/><path d="m10.4 10.4 3 3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+          Search, or paste a YouTube / Spotify URL
+        </div>
+        <div class="scroll">
+          <div class="section-label"><h2>Streams</h2><span>8 saved</span></div>
+          <div class="mix-grid">
+            <div class="mix-card">
+              <div class="mix-art" style="background-image:url('https://i.ytimg.com/vi/Lcdi9O2XB4E/mqdefault.jpg')"><span class="live-chip">LIVE</span></div>
+              <div class="mix-body"><div class="mix-title">tokyo night drive — lofi hiphop + chill</div><div class="mix-channel">TOKYO TONES</div></div>
+            </div>
+            <div class="mix-card">
+              <div class="mix-art" style="background-image:url('https://i.ytimg.com/vi/Kr42vqlVSu0/mqdefault.jpg')"><span class="dur-chip">4:37:50</span></div>
+              <div class="mix-body"><div class="mix-title">California Sunscapes 2025 · Deep House</div><div class="mix-channel">AEVE DEEP</div></div>
+            </div>
+            <div class="mix-card">
+              <div class="mix-art" style="background-image:url('https://i.ytimg.com/vi/VjLWlWKoiZ8/mqdefault.jpg')"><span class="dur-chip">3:30:10</span></div>
+              <div class="mix-body"><div class="mix-title">Café del Mar Sunset Calm 2026</div><div class="mix-channel">AEVE DEEP</div></div>
+            </div>
+            <div class="mix-card">
+              <div class="mix-art" style="background-image:url('https://i.ytimg.com/vi/VHpLQYtjikQ/mqdefault.jpg')"><span class="dur-chip">10:00:00</span></div>
+              <div class="mix-body"><div class="mix-title">Sunday Morning Jazz — Bossa Nova</div><div class="mix-channel">Relax Cafe Music</div></div>
+            </div>
+            <div class="mix-card">
+              <div class="mix-art" style="background-image:url('https://i.ytimg.com/vi/J9aEIYkiOtQ/mqdefault.jpg')"><span class="dur-chip">1:02:35</span></div>
+              <div class="mix-body"><div class="mix-title">DEEP Chill Out Lounge Mix</div><div class="mix-channel">ChillCafé</div></div>
+            </div>
+            <div class="mix-card">
+              <div class="mix-art" style="background-image:url('https://i.ytimg.com/vi/hbe3CQamF8k/mqdefault.jpg')"><span class="dur-chip">5:24</span></div>
+              <div class="mix-body"><div class="mix-title">Massive Attack — Angel</div><div class="mix-channel">Mezzanine</div></div>
+            </div>
+          </div>
+        </div>
+        <div class="mini">
+          <div class="mini-art" style="background-image:url('https://i.ytimg.com/vi/Kr42vqlVSu0/mqdefault.jpg')"></div>
+          <div>
+            <div class="mini-title">California Sunscapes 2025 · Deep House</div>
+            <div class="mini-sub">1:42:18 · streaming</div>
+          </div>
+          <button class="mini-btn"><svg viewBox="0 0 18 18" fill="currentColor"><rect x="5" y="4" width="3" height="10" rx=".8"/><rect x="10" y="4" width="3" height="10" rx=".8"/></svg></button>
+          <button class="mini-btn"><svg viewBox="0 0 18 18" fill="currentColor"><path d="M5 4.5 11 9l-6 4.5v-9ZM12 4.5h1.6v9H12z"/></svg></button>
+        </div>
+        <div class="home-indicator"></div>
+      </div></div>
+    </section>
+
+    <section>
+      <div class="state-title">2 · Now playing (Marquee stage + browse icon)</div>
+      <div class="phone"><div class="screen">
+        <div class="grain"></div>
+        <div class="stage">
+          <div class="fill" style="background-image:url('https://i.ytimg.com/vi/Kr42vqlVSu0/maxresdefault.jpg')"></div>
+          <div class="art" style="background-image:url('https://i.ytimg.com/vi/Kr42vqlVSu0/maxresdefault.jpg')"></div>
+          <div class="stage-inner">
+            <div class="stage-top">
+              <span class="chip"><span class="dot"></span>Streaming</span>
+              <div class="stage-actions">
+                <span class="chip">Queue · 8</span>
+                <button class="ghost-icon" aria-label="Browse streams"><svg viewBox="0 0 16 16" fill="none"><rect x="2.25" y="2.25" width="4.3" height="4.3" rx="1" stroke="currentColor" stroke-width="1.35"/><rect x="9.45" y="2.25" width="4.3" height="4.3" rx="1" stroke="currentColor" stroke-width="1.35"/><rect x="2.25" y="9.45" width="4.3" height="4.3" rx="1" stroke="currentColor" stroke-width="1.35"/><rect x="9.45" y="9.45" width="4.3" height="4.3" rx="1" stroke="currentColor" stroke-width="1.35"/></svg></button>
+              </div>
+            </div>
+            <div class="stage-copy">
+              <div class="stage-no">No. 03 — Deep House</div>
+              <h1 class="stage-title">California Sunscapes</h1>
+              <div class="stage-sub">AEVE DEEP · 2025 Chillout Mix</div>
+              <div class="stage-progress">
+                <div class="rail"><span class="fill2"></span><span class="knob"></span></div>
+                <div class="stage-times"><span>1:42:18</span><span>4:37:50</span></div>
+              </div>
+              <div class="stage-controls">
+                <button class="s-btn quiet"><svg viewBox="0 0 18 18" fill="none"><path d="M5 3.2h8a.8.8 0 0 1 .8.8v10.55L9 11.6l-4.8 2.95V4A.8.8 0 0 1 5 3.2Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg></button>
+                <button class="s-btn"><svg viewBox="0 0 18 18" fill="none"><path d="M10.4 4.2 5.8 9l4.6 4.8" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/><path d="M13 4.2 8.4 9l4.6 4.8" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+                <button class="s-btn primary"><svg viewBox="0 0 18 18" fill="currentColor"><rect x="5" y="4" width="3" height="10" rx=".8"/><rect x="10" y="4" width="3" height="10" rx=".8"/></svg></button>
+                <button class="s-btn"><svg viewBox="0 0 18 18" fill="none"><path d="m7.6 4.2 4.6 4.8-4.6 4.8" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/><path d="m5 4.2 4.6 4.8L5 13.8" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+                <button class="s-btn quiet" style="color:rgba(255,130,130,.8)"><svg viewBox="0 0 18 18" fill="currentColor"><rect x="5.3" y="5.3" width="7.4" height="7.4" rx="1.6"/></svg></button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="home-indicator"></div>
+      </div></div>
+    </section>
+
+    <section>
+      <div class="state-title">3 · Minimized — Dynamic Island / notch</div>
+      <div class="island-col">
+        <div class="island-panel">
+          <div class="island-label">Compact — app backgrounded, stream playing</div>
+          <div class="island wide">
+            <span class="island-art" style="background-image:url('https://i.ytimg.com/vi/Kr42vqlVSu0/mqdefault.jpg')"></span>
+            <span class="island-title-mini">California Sunscapes</span>
+            <span class="island-eq"><i></i><i></i><i></i><i></i></span>
+          </div>
+          <div class="island-note">Art on the left, live brass equalizer on the right — iOS renders this automatically from the app's Now Playing info. On notched (non-island) phones the same info drives the lock screen player instead.</div>
+        </div>
+
+        <div class="island-panel">
+          <div class="island-label">Expanded — long-press the island</div>
+          <div class="island-expanded">
+            <div class="ie-row">
+              <span class="ie-art" style="background-image:url('https://i.ytimg.com/vi/Kr42vqlVSu0/maxresdefault.jpg')"></span>
+              <span>
+                <div class="ie-title">California Sunscapes 2025</div>
+                <div class="ie-sub">AEVE DEEP · bkgrnd</div>
+              </span>
+              <span class="island-eq"><i></i><i></i><i></i><i></i></span>
+            </div>
+            <div class="ie-rail"><span></span></div>
+            <div class="ie-times"><span>1:42:18</span><span>-2:55:32</span></div>
+            <div class="ie-controls">
+              <button class="ie-btn"><svg viewBox="0 0 24 24" fill="none"><path d="M14.5 5.5 8 12l6.5 6.5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+              <button class="ie-btn"><svg viewBox="0 0 24 24" fill="currentColor"><rect x="7" y="5" width="3.6" height="14" rx="1"/><rect x="13.4" y="5" width="3.6" height="14" rx="1"/></svg></button>
+              <button class="ie-btn"><svg viewBox="0 0 24 24" fill="none"><path d="m9.5 5.5 6.5 6.5-6.5 6.5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+            </div>
+          </div>
+          <div class="island-note"><b>Implementation:</b> this is <b>MPNowPlayingInfoCenter</b> + <b>MPRemoteCommandCenter</b> in the native app — title, artist, maxres artwork, elapsed/duration published on every track change, with play/pause/±15s remote commands wired to the player. Unlike the PWA's media-session (which iOS only honors while Safari keeps the page alive), the native version survives backgrounding, powers the island, lock screen, AirPods taps, and CarPlay — and pairs with background-audio mode so streams keep playing indefinitely.</div>
+        </div>
+      </div>
+    </section>
+  </div>
+</div>
+</body>
+</html>

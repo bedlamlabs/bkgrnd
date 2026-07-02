@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>bkgrnd · menubar — Design A with real YouTube art</title>
+<style>
+  /* ── Design A (full-thumbnail popover) executed with REAL artwork ──────
+     from the live Streams playlist. The 16:9 → portrait problem is solved
+     with a two-layer cover: the same maxres frame blurred + zoomed as an
+     ambient fill, with the sharp crop floating on top. Art ladder:
+     maxresdefault (1280×720) → sddefault (640×480) → hqdefault (480×360)
+     → mqdefault (320×180). All 8 current playlist items carry maxres. */
+  :root {
+    --popover: rgba(31, 33, 35, .74);
+    --stroke: rgba(255, 255, 255, .13);
+    --text: rgba(255, 255, 255, .94);
+    --muted: rgba(255, 255, 255, .58);
+    --muted-2: rgba(255, 255, 255, .42);
+    --red: #ff5f5f;
+    --radius: 14px;
+    --app-w: 356px;
+    --font: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 28px; min-height: 100vh;
+    color: var(--text); font-family: var(--font);
+    background:
+      radial-gradient(circle at 20% 0%, rgba(70, 78, 98, .35), transparent 32%),
+      radial-gradient(circle at 80% 10%, rgba(55, 62, 70, .28), transparent 26%),
+      linear-gradient(180deg, #17191d, #0b0c0f 72%);
+  }
+  .page { max-width: 1220px; margin: 0 auto; }
+  .header { margin: 0 0 20px; color: rgba(255,255,255,.74); font-size: 13px; line-height: 1.5; max-width: 900px; }
+  .header b { color: #fff; }
+  .states { display: grid; grid-template-columns: repeat(3, minmax(var(--app-w), 1fr)); gap: 24px; align-items: start; }
+  .state-title { font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: rgba(255,255,255,.48); margin: 0 0 8px 2px; }
+  @media (max-width: 1140px) { .states { grid-template-columns: 1fr; } }
+
+  .app {
+    width: var(--app-w); border-radius: var(--radius);
+    background: var(--popover); border: 1px solid rgba(255,255,255,.11);
+    box-shadow: 0 24px 70px rgba(0,0,0,.42), 0 2px 16px rgba(0,0,0,.32);
+    overflow: hidden;
+    backdrop-filter: blur(28px) saturate(120%);
+    -webkit-backdrop-filter: blur(28px) saturate(120%);
+  }
+
+  /* Two-layer full-bleed cover: blurred ambient fill + sharp crop */
+  .play-cover { height: 548px; position: relative; isolation: isolate; overflow: hidden; }
+  .cover-ambient {
+    position: absolute; inset: -40px; z-index: -3;
+    background-size: cover; background-position: center;
+    filter: blur(46px) saturate(150%) brightness(.72);
+    transform: scale(1.25);
+  }
+  .cover-art {
+    position: absolute; inset: 0; z-index: -2;
+    background-size: cover; background-position: center 38%;
+  }
+  .play-cover::before {
+    content: ""; position: absolute; inset: 0; z-index: -1;
+    background:
+      linear-gradient(180deg, rgba(0,0,0,.14) 0%, rgba(0,0,0,.04) 30%, rgba(0,0,0,.36) 66%, rgba(0,0,0,.68) 100%),
+      radial-gradient(circle at 50% 88%, rgba(0,0,0,.30), transparent 48%);
+  }
+  .play-cover::after {
+    content: ""; position: absolute; inset: 0; pointer-events: none;
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,.08), inset 0 -90px 100px rgba(0,0,0,.36);
+    border-radius: inherit;
+  }
+
+  .subtle-top { position: absolute; inset: 14px 14px auto 14px; display: flex; align-items: center; justify-content: space-between; z-index: 2; }
+  .micro-status {
+    height: 26px; padding: 0 9px; display: inline-flex; align-items: center; gap: 6px;
+    border-radius: 999px; background: rgba(0,0,0,.18); border: 1px solid rgba(255,255,255,.12);
+    color: rgba(255,255,255,.72); font-size: 11px; font-weight: 600; backdrop-filter: blur(16px);
+  }
+  .pulse-dot { width: 6px; height: 6px; border-radius: 50%; background: rgba(255,255,255,.8); box-shadow: 0 0 0 3px rgba(255,255,255,.1); animation: pulse 2.4s ease-in-out infinite; }
+  @keyframes pulse { 0%,100% { opacity:.6 } 50% { opacity: 1 } }
+  .ghost-icon {
+    width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center;
+    border-radius: 999px; color: rgba(255,255,255,.7); background: rgba(0,0,0,.16);
+    border: 1px solid rgba(255,255,255,.11); backdrop-filter: blur(16px); padding: 0;
+  }
+  .ghost-icon svg { width: 13px; height: 13px; opacity: .85; }
+
+  .cover-copy { position: absolute; left: 31px; right: 31px; bottom: 164px; z-index: 2; }
+  .stream-title {
+    font-size: 24px; line-height: 1.1; font-weight: 780; letter-spacing: -.03em;
+    text-shadow: 0 2px 24px rgba(0,0,0,.55); margin: 0 0 7px;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+  }
+  .stream-subtitle { font-size: 13.5px; color: rgba(255,255,255,.78); text-shadow: 0 1px 16px rgba(0,0,0,.5); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  .cover-progress { position: absolute; left: 31px; right: 31px; bottom: 104px; z-index: 2; }
+  .bar { height: 4px; border-radius: 99px; background: rgba(255,255,255,.30); position: relative; }
+  .bar .fill { display: block; height: 100%; border-radius: 99px; background: rgba(255,255,255,.94); }
+  .bar .knob { position: absolute; top: 50%; width: 14px; height: 14px; transform: translate(-50%,-50%); border-radius: 50%; background: #fff; box-shadow: 0 2px 8px rgba(0,0,0,.35); }
+  .time-row { display: flex; justify-content: space-between; margin-top: 10px; font-size: 11px; font-weight: 600; color: rgba(255,255,255,.75); text-shadow: 0 1px 10px rgba(0,0,0,.5); font-variant-numeric: tabular-nums; }
+
+  .cover-controls { position: absolute; left: 24px; right: 24px; bottom: 28px; z-index: 2; display: flex; gap: 13px; align-items: center; justify-content: center; }
+  .control { width: 34px; height: 34px; border: 0; border-radius: 999px; background: transparent; color: rgba(255,255,255,.85); display: inline-flex; align-items: center; justify-content: center; padding: 0; }
+  .control svg { width: 18px; height: 18px; }
+  .control.primary { width: 48px; height: 48px; background: #fff; color: #101010; box-shadow: 0 8px 24px rgba(0,0,0,.24); }
+  .control.primary svg { width: 20px; height: 20px; }
+  .control.stop { color: rgba(255,112,112,.9); }
+
+  /* Stopped */
+  .stopped { padding: 12px 14px 16px; min-height: 322px; background: radial-gradient(circle at 78% 7%, rgba(255,255,255,.06), transparent 35%), rgba(32,34,36,.76); }
+  .now-row { display: grid; grid-template-columns: 78px 1fr 26px; gap: 11px; align-items: start; }
+  .idle-art { width: 78px; height: 78px; border-radius: 8px; background: linear-gradient(180deg, rgba(255,255,255,.08), rgba(255,255,255,.02)), rgba(0,0,0,.18); border: 1px solid rgba(255,255,255,.08); display: flex; align-items: center; justify-content: center; color: rgba(255,255,255,.3); font-weight: 900; font-size: 26px; }
+  .stopped-title { margin-top: 2px; font-size: 15px; font-weight: 760; letter-spacing: -.015em; }
+  .stopped-sub { margin-top: 4px; font-size: 12px; color: rgba(255,255,255,.58); }
+  .plain-controls { display: flex; justify-content: center; gap: 13px; margin: 16px 0 14px; }
+  .plain-btn { width: 39px; height: 39px; display: inline-flex; align-items: center; justify-content: center; border-radius: 999px; border: 0; background: rgba(255,255,255,.055); color: rgba(255,255,255,.48); }
+  .plain-btn.primary { width: 50px; height: 50px; background: rgba(45,131,255,.88); color: rgba(255,255,255,.9); }
+  .plain-btn svg { width: 17px; height: 17px; }
+  .plain-btn.primary svg { width: 20px; height: 20px; }
+  .volume { display: grid; grid-template-columns: 18px 1fr 18px; align-items: center; gap: 8px; margin: 0 5px 14px; color: rgba(255,255,255,.58); }
+  .volume svg { width: 15px; height: 15px; }
+  .volume .bar .fill { width: 82%; background: rgba(255,255,255,.84); }
+  .volume .bar .knob { left: 82%; width: 12px; height: 12px; }
+  .url-row { height: 34px; border-radius: 7px; border: 1px solid rgba(255,255,255,.22); background: rgba(255,255,255,.035); display: flex; align-items: center; padding: 0 10px; gap: 8px; }
+  .url-row input { min-width: 0; flex: 1; background: transparent; border: 0; outline: 0; color: #fff; font: 600 12px var(--font); }
+  .url-row input::placeholder { color: rgba(255,255,255,.44); }
+  .footer-hint { display: flex; justify-content: space-between; margin: 13px 2px 0; font-size: 12px; color: rgba(255,255,255,.42); }
+
+  /* Playlist 2×2 */
+  .playlist { min-height: 542px; padding: 12px 14px 15px; background: linear-gradient(180deg, rgba(255,255,255,.035), rgba(255,255,255,.01)), rgba(32,34,36,.78); }
+  .compact-now { height: 72px; display: grid; grid-template-columns: 58px 1fr 28px; gap: 10px; align-items: center; margin-bottom: 12px; }
+  .compact-cover { width: 58px; height: 58px; border-radius: 8px; background-size: cover; background-position: center; box-shadow: 0 4px 16px rgba(0,0,0,.24); }
+  .compact-kicker { font-size: 11px; color: rgba(255,255,255,.46); font-weight: 650; margin-bottom: 4px; }
+  .compact-title { font-size: 14px; font-weight: 780; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .compact-sub { margin-top: 3px; font-size: 12px; color: rgba(255,255,255,.55); }
+  .playlist .url-row { margin-bottom: 13px; }
+  .grid-meta { display: flex; justify-content: space-between; margin: 0 2px 9px; }
+  .grid-title { font-size: 13px; font-weight: 750; color: rgba(255,255,255,.78); }
+  .grid-note { font-size: 12px; color: rgba(255,255,255,.42); }
+  .stream-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+  .stream-tile {
+    height: 154px; border-radius: 12px; overflow: hidden; position: relative;
+    background-size: cover; background-position: center;
+    border: 1px solid rgba(255,255,255,.11); box-shadow: 0 8px 18px rgba(0,0,0,.22);
+  }
+  .stream-tile::before { content: ""; position: absolute; inset: 0; background: linear-gradient(180deg, rgba(0,0,0,.02) 28%, rgba(0,0,0,.18) 56%, rgba(0,0,0,.72) 100%); }
+  .stream-tile.active { border-color: rgba(255,255,255,.34); box-shadow: 0 0 0 1px rgba(255,255,255,.18), 0 8px 18px rgba(0,0,0,.24); }
+  .tile-mini { position: absolute; top: 8px; right: 8px; width: 24px; height: 24px; display: inline-flex; align-items: center; justify-content: center; border-radius: 999px; color: rgba(255,255,255,.74); background: rgba(0,0,0,.18); border: 1px solid rgba(255,255,255,.10); backdrop-filter: blur(10px); font-size: 11px; }
+  .tile-copy { position: absolute; left: 12px; right: 12px; bottom: 11px; }
+  .tile-title { font-size: 13px; font-weight: 780; line-height: 1.18; letter-spacing: -.01em; text-shadow: 0 1px 12px rgba(0,0,0,.5); }
+  .tile-sub { margin-top: 4px; font-size: 11px; color: rgba(255,255,255,.64); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .active-pill { position: absolute; top: 8px; left: 8px; display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 7px; border-radius: 999px; background: rgba(0,0,0,.26); border: 1px solid rgba(255,255,255,.14); color: rgba(255,255,255,.78); font-size: 10px; font-weight: 700; backdrop-filter: blur(12px); }
+
+  .footnote {
+    margin-top: 26px; padding: 14px 16px; border: 1px solid rgba(255,255,255,.09); border-radius: 12px;
+    background: rgba(255,255,255,.03); font-size: 12px; line-height: 1.6; color: rgba(255,255,255,.62); max-width: 900px;
+  }
+  .footnote b { color: rgba(255,255,255,.85); }
+  .footnote code { font: 11px ui-monospace, monospace; color: #9ecbff; }
+</style>
+</head>
+<body>
+<div class="page">
+  <p class="header"><b>bkgrnd menubar — Design A with the real playlist.</b> Full-thumbnail play surface exactly as drawn, but every cover here is live YouTube art from the <i>Streams</i> playlist. The 16:9 → portrait problem is handled with a two-layer cover: the same frame blurred and zoomed fills the popover edge-to-edge, and the sharp center crop floats over it — no letterboxing, no stretched pixels, works even when a video only has 320×180 art.</p>
+
+  <div class="states">
+    <section>
+      <div class="state-title">A1 · Playing — tokyo night drive (real maxres art)</div>
+      <div class="app play-cover">
+        <div class="cover-ambient" style="background-image:url('https://i.ytimg.com/vi/Lcdi9O2XB4E/maxresdefault.jpg')"></div>
+        <div class="cover-art" style="background-image:url('https://i.ytimg.com/vi/Lcdi9O2XB4E/maxresdefault.jpg')"></div>
+        <div class="subtle-top">
+          <div class="micro-status"><span class="pulse-dot"></span> Playing</div>
+          <button class="ghost-icon"><svg viewBox="0 0 16 16" fill="none"><rect x="2.25" y="2.25" width="4.3" height="4.3" rx="1" stroke="currentColor" stroke-width="1.35"/><rect x="9.45" y="2.25" width="4.3" height="4.3" rx="1" stroke="currentColor" stroke-width="1.35"/><rect x="2.25" y="9.45" width="4.3" height="4.3" rx="1" stroke="currentColor" stroke-width="1.35"/><rect x="9.45" y="9.45" width="4.3" height="4.3" rx="1" stroke="currentColor" stroke-width="1.35"/></svg></button>
+        </div>
+        <div class="cover-copy">
+          <h1 class="stream-title">tokyo night drive — lofi hiphop + chill</h1>
+          <div class="stream-subtitle">TOKYO TONES · live background stream</div>
+        </div>
+        <div class="cover-progress">
+          <div class="bar"><span class="fill" style="width:41%"></span><span class="knob" style="left:41%"></span></div>
+          <div class="time-row"><span>2:42:18</span><span>LIVE</span></div>
+        </div>
+        <div class="cover-controls">
+          <button class="control"><svg viewBox="0 0 18 18" fill="none"><path d="M5 3.2h8a.8.8 0 0 1 .8.8v10.55L9 11.6l-4.8 2.95V4A.8.8 0 0 1 5 3.2Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg></button>
+          <button class="control"><svg viewBox="0 0 18 18" fill="none"><path d="M10.4 4.2 5.8 9l4.6 4.8" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/><path d="M13 4.2 8.4 9l4.6 4.8" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+          <button class="control primary"><svg viewBox="0 0 18 18" fill="currentColor"><rect x="5" y="4" width="3" height="10" rx=".8"/><rect x="10" y="4" width="3" height="10" rx=".8"/></svg></button>
+          <button class="control"><svg viewBox="0 0 18 18" fill="none"><path d="m7.6 4.2 4.6 4.8-4.6 4.8" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/><path d="m5 4.2 4.6 4.8L5 13.8" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+          <button class="control stop"><svg viewBox="0 0 18 18" fill="currentColor"><rect x="5.3" y="5.3" width="7.4" height="7.4" rx="1.6"/></svg></button>
+          <button class="control" style="opacity:.68"><svg viewBox="0 0 18 18" fill="none"><rect x="3.1" y="3.1" width="4.6" height="4.6" rx="1.05" stroke="currentColor" stroke-width="1.35"/><rect x="10.3" y="3.1" width="4.6" height="4.6" rx="1.05" stroke="currentColor" stroke-width="1.35"/><rect x="3.1" y="10.3" width="4.6" height="4.6" rx="1.05" stroke="currentColor" stroke-width="1.35"/><rect x="10.3" y="10.3" width="4.6" height="4.6" rx="1.05" stroke="currentColor" stroke-width="1.35"/></svg></button>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="state-title">A2 · Stopped</div>
+      <div class="app stopped">
+        <div class="now-row">
+          <div class="idle-art">b</div>
+          <div>
+            <div class="stopped-title">Nothing playing</div>
+            <div class="stopped-sub">Search or paste a stream URL below</div>
+          </div>
+          <button class="ghost-icon" style="width:25px;height:25px;border-radius:8px"><svg viewBox="0 0 16 16" fill="none"><rect x="2.25" y="2.25" width="4.3" height="4.3" rx="1" stroke="currentColor" stroke-width="1.35"/><rect x="9.45" y="2.25" width="4.3" height="4.3" rx="1" stroke="currentColor" stroke-width="1.35"/><rect x="2.25" y="9.45" width="4.3" height="4.3" rx="1" stroke="currentColor" stroke-width="1.35"/><rect x="9.45" y="9.45" width="4.3" height="4.3" rx="1" stroke="currentColor" stroke-width="1.35"/></svg></button>
+        </div>
+        <div class="plain-controls">
+          <button class="plain-btn"><svg viewBox="0 0 18 18" fill="none"><path d="M9 4.3a4.7 4.7 0 1 1-4.6 5.6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M4.1 5v4h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+          <button class="plain-btn primary"><svg viewBox="0 0 18 18" fill="currentColor"><path d="M5.4 3.4 14 9l-8.6 5.6V3.4Z"/></svg></button>
+          <button class="plain-btn"><svg viewBox="0 0 18 18" fill="none"><path d="M9 4.3a4.7 4.7 0 1 0 4.6 5.6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M13.9 5v4h-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+          <button class="plain-btn" style="color:rgba(255,95,95,.68)"><svg viewBox="0 0 18 18" fill="currentColor"><rect x="5.3" y="5.3" width="7.4" height="7.4" rx="1.6"/></svg></button>
+        </div>
+        <div class="volume">
+          <svg viewBox="0 0 18 18" fill="currentColor"><path d="M3.2 7h3.1l3.9-3.1v10.2L6.3 11H3.2z"/></svg>
+          <div class="bar"><span class="fill"></span><span class="knob"></span></div>
+          <svg viewBox="0 0 18 18" fill="none"><path d="M3.2 7h3.1l3.9-3.1v10.2L6.3 11H3.2z" fill="currentColor"/><path d="M12.3 6.2a4 4 0 0 1 0 5.6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+        </div>
+        <div class="url-row"><input placeholder="Search or Paste URL" /><span style="color:rgba(255,255,255,.5);font-size:12px">↵</span></div>
+        <div class="footer-hint"><span>Streams, mixes, playlists</span><span style="color:rgba(122,169,255,.9)">Browse</span></div>
+      </div>
+    </section>
+
+    <section>
+      <div class="state-title">A3 · Playlist — real 2×2 art grid</div>
+      <div class="app playlist">
+        <div class="compact-now">
+          <div class="compact-cover" style="background-image:url('https://i.ytimg.com/vi/Lcdi9O2XB4E/mqdefault.jpg')"></div>
+          <div>
+            <div class="compact-kicker">Now playing</div>
+            <div class="compact-title">tokyo night drive — lofi hiphop</div>
+            <div class="compact-sub">2:42:18 elapsed · live stream</div>
+          </div>
+          <button class="ghost-icon">⌃</button>
+        </div>
+        <div class="url-row"><input placeholder="Search or Paste URL" /><span style="color:rgba(255,255,255,.5);font-size:12px">Add</span></div>
+        <div class="grid-meta"><div class="grid-title">Streams</div><div class="grid-note">8 saved</div></div>
+        <div class="stream-grid">
+          <div class="stream-tile active" style="background-image:url('https://i.ytimg.com/vi/Lcdi9O2XB4E/mqdefault.jpg')">
+            <div class="active-pill"><span class="pulse-dot"></span> Playing</div>
+            <span class="tile-mini">⋯</span>
+            <div class="tile-copy"><div class="tile-title">tokyo night drive</div><div class="tile-sub">TOKYO TONES · live</div></div>
+          </div>
+          <div class="stream-tile" style="background-image:url('https://i.ytimg.com/vi/VjLWlWKoiZ8/mqdefault.jpg')">
+            <span class="tile-mini">▶</span>
+            <div class="tile-copy"><div class="tile-title">Café del Mar Sunset Calm</div><div class="tile-sub">AEVE DEEP · 3h 30m</div></div>
+          </div>
+          <div class="stream-tile" style="background-image:url('https://i.ytimg.com/vi/Kr42vqlVSu0/mqdefault.jpg')">
+            <span class="tile-mini">▶</span>
+            <div class="tile-copy"><div class="tile-title">California Sunscapes 2025</div><div class="tile-sub">AEVE DEEP · 4h 37m</div></div>
+          </div>
+          <div class="stream-tile" style="background-image:url('https://i.ytimg.com/vi/VHpLQYtjikQ/mqdefault.jpg')">
+            <span class="tile-mini">▶</span>
+            <div class="tile-copy"><div class="tile-title">Sunday Morning Jazz</div><div class="tile-sub">Relax Cafe Music · 10h</div></div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <div class="footnote">
+    <b>Thumbnail strategy (answering “are there different sizes?”):</b> yes — every YouTube video exposes
+    <code>mqdefault</code> 320×180 · <code>hqdefault</code> 480×360 (letterboxed 4:3) · <code>sddefault</code> 640×480 ·
+    <code>maxresdefault</code> 1280×720 (HD uploads only, else 404). I probed the current playlist: <b>all 8 items return full 1280×720 maxres</b>,
+    which is plenty for a 356 pt-wide popover even at 2× retina. Load order in the app: try <code>maxresdefault</code>, fall back to
+    <code>sddefault</code> → <code>hqdefault</code> → <code>mqdefault</code> on 404/stub (stubs are detectable — they come back 120 px wide).
+    The remaining constraint is aspect ratio, not resolution: art is 16:9 landscape, so the portrait cover uses a center crop over a blurred
+    self-fill (as rendered in A1) instead of stretching or letterboxing.
+  </div>
+</div>
+</body>
+</html>
