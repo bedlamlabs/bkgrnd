@@ -72,7 +72,13 @@ final class AppModel: ObservableObject {
     KeychainStore.write("woprBearerToken", value: token)
 
     if let url = URL(string: baseURL) {
-      Task { await client.updateConfig(.init(baseURL: url, bearerToken: token.isEmpty ? nil : token)) }
+      Task {
+        await client.updateConfig(.init(baseURL: url, bearerToken: token.isEmpty ? nil : token))
+        // The initial fetches likely 401'd before credentials existed;
+        // re-fetch immediately so saving settings brings the grid alive.
+        await refreshPlaylists()
+        await refreshRemoteStatus()
+      }
     }
   }
 

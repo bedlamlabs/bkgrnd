@@ -5,6 +5,7 @@ import SwiftUI
 /// stage presents as a full-screen cover.
 struct RootView: View {
   @EnvironmentObject var appModel: AppModel
+  @Environment(\.scenePhase) private var scenePhase
   @State private var showSettings = false
   @State private var showSearch = false
 
@@ -50,6 +51,14 @@ struct RootView: View {
     .task {
       await appModel.refreshPlaylists()
       await appModel.refreshRemoteStatus()
+    }
+    .onChange(of: scenePhase) { _, phase in
+      if phase == .active {
+        Task {
+          await appModel.refreshPlaylists()
+          await appModel.refreshRemoteStatus()
+        }
+      }
     }
     .task {
       // Poll the Mac's status so the Remote dot and mini player stay live.
