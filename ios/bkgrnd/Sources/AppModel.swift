@@ -63,6 +63,9 @@ final class AppModel: ObservableObject {
     audioPlayer.onSkipRequested = { [weak self] forward in
       Task { await self?.advanceQueue(by: forward ? 1 : -1) }
     }
+    audioPlayer.onPlaybackError = { [weak self] message in
+      self?.statusMessage = message
+    }
   }
 
   func updateServerSettings(baseURL: String, token: String) {

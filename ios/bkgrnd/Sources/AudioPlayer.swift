@@ -1,5 +1,7 @@
 import AVFoundation
+import Combine
 import MediaPlayer
+import OSLog
 import UIKit
 
 @MainActor
@@ -12,10 +14,14 @@ final class AudioPlayer: ObservableObject {
   var onItemEnded: (() -> Void)?
   /// Fires on lock-screen/island prev-next taps.
   var onSkipRequested: ((_ forward: Bool) -> Void)?
+  /// Fires with a human-readable message when the player item fails.
+  var onPlaybackError: ((String) -> Void)?
 
+  private let log = Logger(subsystem: "com.bedlamlabs.bkgrnd.ios", category: "player")
   private var player: AVPlayer?
   private var timeObserver: Any?
   private var endObserver: NSObjectProtocol?
+  private var statusCancellable: AnyCancellable?
   private var commandsConfigured = false
 
   private var nowPlayingTitle = ""
@@ -62,6 +68,29 @@ final class AudioPlayer: ObservableObject {
         guard let self else { return }
         self.isPlaying = false
         self.onItemEnded?()
+      }
+    }
+
+    statusCancellable = item.publisher(for: \.status).sink { [weak self, weak item] status in
+      Task { @MainActor in
+        guard let self else { return }
+        switch status {
+        case .failed:
+          let error = item?.error
+          let detail = error.map(String.init(describing:)) ?? "unknown"
+          self.log.error("player item failed: \(detail, privacy: .public)")
+          if let events = item?.errorLog()?.events {
+            for e in events {
+              self.log.error("errorLog: status=\(e.errorStatusCode) domain=\(e.errorDomain, privacy: .public) comment=\(e.errorComment ?? "", privacy: .public)")
+            }
+          }
+          self.isPlaying = false
+          self.onPlaybackError?((error as NSError?)?.localizedDescription ?? "playback failed")
+        case .readyToPlay:
+          self.log.info("player item ready")
+        default:
+          break
+        }
       }
     }
 
@@ -115,6 +144,7 @@ final class AudioPlayer: ObservableObject {
       NotificationCenter.default.removeObserver(endObserver)
       self.endObserver = nil
     }
+    statusCancellable = nil
   }
 
   private func configureAudioSession() {
@@ -123,7 +153,7 @@ final class AudioPlayer: ObservableObject {
       try session.setCategory(.playback, mode: .default, options: [.allowAirPlay])
       try session.setActive(true)
     } catch {
-      // ignore
+      log.error("audio session activation failed: \(String(describing: error), privacy: .public)")
     }
   }
 
