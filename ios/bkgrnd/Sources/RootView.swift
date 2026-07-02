@@ -24,6 +24,9 @@ struct RootView: View {
             if appModel.scope == .remote && appModel.remoteStatus?.online != true {
               statusCard("Mac is unavailable. Open bkgrnd on the Mac to enable Remote.")
             }
+            if appModel.scope == .remote, let err = appModel.lastRemoteError {
+              statusCard("Remote error — \(err)")
+            }
             Text("Streams")
               .font(.system(size: 16, weight: .bold))
               .foregroundStyle(Theme.text)

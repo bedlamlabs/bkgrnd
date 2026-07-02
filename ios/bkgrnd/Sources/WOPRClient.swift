@@ -16,6 +16,18 @@ actor WOPRClient {
     self.config = config
   }
 
+  func putPlaylists(_ doc: PlaylistDoc) async throws {
+    var req = URLRequest(url: config.baseURL.appendingPathComponent("/api/v1/playlists.json"))
+    req.httpMethod = "PUT"
+    req.setValue("application/json", forHTTPHeaderField: "content-type")
+    addAuth(&req)
+    req.httpBody = try JSONEncoder().encode(doc)
+    let (_, resp) = try await URLSession.shared.data(for: req)
+    guard let status = (resp as? HTTPURLResponse)?.statusCode, (200..<300).contains(status) else {
+      throw URLError(.badServerResponse)
+    }
+  }
+
   func fetchPlaylists() async throws -> PlaylistDoc {
     var req = URLRequest(url: config.baseURL.appendingPathComponent("/api/v1/playlists.json"))
     req.httpMethod = "GET"

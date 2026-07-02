@@ -1098,3 +1098,11 @@ setScope("remote");
 loadLibrary();
 refreshLocalStatus();
 setInterval(refreshLocalStatus, 3000);
+// Keep the grid's recency order fresh (the Mac re-sorts on every play).
+setInterval(loadLibrary, 60000);
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) {
+    loadLibrary();
+    refreshLocalStatus();
+  }
+});

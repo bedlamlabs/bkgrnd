@@ -177,7 +177,43 @@ final class AppModel: ObservableObject {
     let headers = await client.streamHeaders()
     await audioPlayer.play(url: stream, headers: headers, title: item.title, artist: item.channel ?? "", artworkURL: item.thumbnail)
     statusMessage = ""
+    bumpPlaylistOrder(item)
     prewarmNext()
+  }
+
+  /// Recency ordering, mirroring the menubar's save_item: move the played
+  /// item to the front of the canonical playlist and push it to the server
+  /// (the Mac adopts newer remote docs on its next sync).
+  private func bumpPlaylistOrder(_ item: PlaylistItem) {
+    guard var doc = playlists, !doc.playlists.isEmpty else { return }
+    let index = doc.playlists.firstIndex(where: { ["streams", "recent", "recent-mixes"].contains($0.id) }) ?? 0
+
+    var list = doc.playlists[index]
+    if list.items.first?.url == item.url { return } // already front
+    list.items.removeAll { $0.url == item.url }
+    var entry = item
+    if entry.addedAt == nil || entry.addedAt?.isEmpty == true {
+      entry.addedAt = Self.isoNow()
+    }
+    list.items.insert(entry, at: 0)
+    if list.items.count > 50 { list.items.removeLast(list.items.count - 50) }
+    doc.playlists[index] = list
+    doc.updatedAt = Self.isoNow()
+
+    playlists = doc
+    recentPlaylist = list
+
+    Task { [doc] in
+      try? await client.putPlaylists(doc)
+    }
+  }
+
+  private static func isoNow() -> String {
+    let formatter = DateFormatter()
+    formatter.locale = Locale(identifier: "en_US_POSIX")
+    formatter.timeZone = TimeZone(identifier: "UTC")
+    formatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'"
+    return formatter.string(from: Date())
   }
 
   private func prewarmNext() {

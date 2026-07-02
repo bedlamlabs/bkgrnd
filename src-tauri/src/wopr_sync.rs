@@ -16,6 +16,10 @@ struct LocalPlaybackCommand {
     action: String,
     #[serde(default)]
     url: String,
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    thumbnail: String,
 }
 
 fn base_url() -> String {
@@ -194,7 +198,26 @@ async fn execute_command(command: LocalPlaybackCommand, app: AppHandle, app_stat
     match command.action.as_str() {
         "play" if !command.url.trim().is_empty() => {
             if is_allowed_play_url(&command.url) {
-                let _ = player::play(&command.url, app, app_state).await;
+                let played = player::play(&command.url, app, app_state).await.is_ok();
+                // Remote-commanded plays reorder the canonical playlist the
+                // same way popover plays do, so every client sees a
+                // recency-sorted grid after the next sync.
+                if played {
+                    let title = if command.title.trim().is_empty() {
+                        command.url.clone()
+                    } else {
+                        command.title.clone()
+                    };
+                    playlists::save_item(playlists::PlaylistItem {
+                        url: command.url.clone(),
+                        title,
+                        channel: String::new(),
+                        thumbnail: command.thumbnail.clone(),
+                        duration: None,
+                        added_at: String::new(),
+                    });
+                    sync_once().await;
+                }
             }
         }
         "pause_toggle" => {
