@@ -13,31 +13,35 @@ struct RootView: View {
     ZStack(alignment: .bottom) {
       Theme.bg.ignoresSafeArea()
 
-      ScrollView {
-        VStack(alignment: .leading, spacing: 0) {
-          header
-          scopeSegment
-          searchRow
-          if appModel.scope == .remote && appModel.remoteStatus?.online != true {
-            statusCard("Mac is unavailable. Open bkgrnd on the Mac to enable Remote.")
+      // Wordmark + scope tabs stay pinned; everything below them scrolls.
+      VStack(spacing: 0) {
+        header
+        scopeSegment
+
+        ScrollView {
+          VStack(alignment: .leading, spacing: 0) {
+            searchRow
+            if appModel.scope == .remote && appModel.remoteStatus?.online != true {
+              statusCard("Mac is unavailable. Open bkgrnd on the Mac to enable Remote.")
+            }
+            Text("Streams")
+              .font(.system(size: 16, weight: .bold))
+              .foregroundStyle(Theme.text)
+              .padding(.horizontal, 20)
+              .padding(.bottom, 10)
+            BrowseGrid()
+              .padding(.horizontal, 20)
+            if let err = appModel.lastSyncError {
+              statusCard("Offline — \(err)")
+                .padding(.top, 12)
+            }
+            Color.clear.frame(height: 110) // room for the mini player
           }
-          Text("Streams")
-            .font(.system(size: 16, weight: .bold))
-            .foregroundStyle(Theme.text)
-            .padding(.horizontal, 20)
-            .padding(.bottom, 10)
-          BrowseGrid()
-            .padding(.horizontal, 20)
-          if let err = appModel.lastSyncError {
-            statusCard("Offline — \(err)")
-              .padding(.top, 12)
-          }
-          Color.clear.frame(height: 110) // room for the mini player
         }
-      }
-      .refreshable {
-        await appModel.refreshPlaylists()
-        await appModel.refreshRemoteStatus()
+        .refreshable {
+          await appModel.refreshPlaylists()
+          await appModel.refreshRemoteStatus()
+        }
       }
 
       MiniPlayerBar()

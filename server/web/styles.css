@@ -96,6 +96,20 @@ button { font: inherit; color: inherit; cursor: pointer; }
   grid-template-columns: 1fr 1fr;
   padding: 3px;
   margin-bottom: 14px;
+  /* Pinned under the (sticky) wordmark row while the grid scrolls. */
+  position: sticky;
+  top: calc(var(--safe-top) + 50px);
+  z-index: 5;
+}
+
+/* Solid full-bleed slab behind the pinned tabs so cards scroll cleanly
+   underneath instead of peeking through the gap and side gutters. */
+.segment::before {
+  content: "";
+  position: absolute;
+  inset: -16px -20px -10px;
+  background: var(--bg);
+  z-index: -1;
 }
 
 .seg-btn {

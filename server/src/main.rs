@@ -780,9 +780,11 @@ async fn stream_audio(
         const PROXY_CHUNK: u64 = 8 * 1024 * 1024;
         let (start, client_end) =
             parse_range_start_end(headers.get(header::RANGE).and_then(|v| v.to_str().ok()));
-        let end = client_end
-            .map(|e| e.min(start + PROXY_CHUNK - 1))
-            .unwrap_or(start + PROXY_CHUNK - 1);
+        // Only cap OPEN-ENDED ranges (those are what YouTube throttles).
+        // Explicit client ranges must be honored verbatim: AVPlayer treats a
+        // response shorter than the exact range it asked for as fatal
+        // (CoreMedia -12939 "content range mismatch").
+        let end = client_end.unwrap_or(start + PROXY_CHUNK - 1);
         req = req.header(header::RANGE, format!("bytes={}-{}", start, end));
     }
 
