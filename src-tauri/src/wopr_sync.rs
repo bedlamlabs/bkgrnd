@@ -105,38 +105,52 @@ pub async fn sync_once() {
         playlists::save_playlists(&local);
     }
 
-    // Fetch remote doc (best-effort)
-    let remote: Option<playlists::PlaylistDoc> =
-        match client.get(&url).headers(auth_headers()).send().await {
-            Ok(resp) if resp.status().is_success() => match resp.text().await {
-                Ok(text) => serde_yaml::from_str(&text).ok(),
-                Err(_) => None,
-            },
-            _ => None,
-        };
+    // Fetch remote doc, distinguishing "server unreachable" (keep local,
+    // try later) from "server reachable but doc corrupt" (heal it by
+    // pushing local). Without that distinction a torn playlists.yaml on
+    // the server wedges sync forever.
+    enum RemoteDoc {
+        Ok(playlists::PlaylistDoc),
+        Corrupt,
+        Unreachable,
+    }
 
-    match remote {
-        None => {
-            // If we can't reach WOPR, just keep local as-is.
-            return;
-        }
-        Some(remote_doc) => {
+    let remote = match client.get(&url).headers(auth_headers()).send().await {
+        Ok(resp) if resp.status().is_success() => match resp.text().await {
+            Ok(text) => match serde_yaml::from_str(&text) {
+                Ok(doc) => RemoteDoc::Ok(doc),
+                Err(e) => {
+                    eprintln!("[wopr-sync] remote playlists corrupt ({e}); pushing local copy");
+                    RemoteDoc::Corrupt
+                }
+            },
+            Err(_) => RemoteDoc::Unreachable,
+        },
+        _ => RemoteDoc::Unreachable,
+    };
+
+    let push_local = match remote {
+        RemoteDoc::Unreachable => return,
+        RemoteDoc::Corrupt => true,
+        RemoteDoc::Ok(remote_doc) => {
             let local_ts = parse_ts(&local.updated_at);
             let remote_ts = parse_ts(&remote_doc.updated_at);
-
             if remote_ts > local_ts {
                 playlists::save_playlists(&remote_doc);
                 return;
             }
-
             // Push local if newer or equal (idempotent for a single-user doc)
-            let _ = client
-                .put(&url)
-                .headers(auth_headers())
-                .body(serde_yaml::to_string(&local).unwrap_or_default())
-                .send()
-                .await;
+            true
         }
+    };
+
+    if push_local {
+        let _ = client
+            .put(&url)
+            .headers(auth_headers())
+            .body(serde_yaml::to_string(&local).unwrap_or_default())
+            .send()
+            .await;
     }
 }
 

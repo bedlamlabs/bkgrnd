@@ -175,6 +175,15 @@ fn playlists_path(data_dir: &PathBuf) -> PathBuf {
     data_dir.join("playlists.yaml")
 }
 
+/// Write via temp-file + rename so a crash mid-write can never leave a torn
+/// file behind. (A truncated playlists.yaml once wedged sync fleet-wide: the
+/// Mac treated the unparseable remote as unreachable and never overwrote it.)
+async fn write_atomic(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    let tmp = path.with_extension("tmp");
+    tokio::fs::write(&tmp, bytes).await?;
+    tokio::fs::rename(&tmp, path).await
+}
+
 fn history_path(data_dir: &PathBuf) -> PathBuf {
     data_dir.join("history.json")
 }
@@ -333,8 +342,8 @@ async fn put_playlists(
         Ok(s) => s,
         Err(_) => return (StatusCode::BAD_REQUEST, "Invalid UTF-8").into_response(),
     };
-    if serde_yaml::from_str::<PlaylistDoc>(raw).is_err() {
-        return (StatusCode::BAD_REQUEST, "Invalid playlist YAML").into_response();
+    if let Err(e) = serde_yaml::from_str::<PlaylistDoc>(raw) {
+        return (StatusCode::BAD_REQUEST, format!("Invalid playlist YAML: {e}")).into_response();
     }
 
     let _guard = state.playlists_lock.lock().await;
@@ -343,7 +352,7 @@ async fn put_playlists(
         error!("failed to create data dir: {e}");
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
-    if let Err(e) = tokio::fs::write(&path, raw).await {
+    if let Err(e) = write_atomic(&path, raw.as_bytes()).await {
         error!("failed to write playlists: {e}");
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
@@ -371,7 +380,7 @@ async fn put_playlists_json(
         error!("failed to create data dir: {e}");
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
-    if let Err(e) = tokio::fs::write(&path, raw).await {
+    if let Err(e) = write_atomic(&path, raw.as_bytes()).await {
         error!("failed to write playlists: {e}");
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
@@ -426,7 +435,7 @@ async fn put_history_json(
     }
 
     let path = history_path(&state.data_dir);
-    if let Err(e) = tokio::fs::write(&path, &body).await {
+    if let Err(e) = write_atomic(&path, &body).await {
         error!("failed to write history: {e}");
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
