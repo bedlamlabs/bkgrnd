@@ -851,10 +851,16 @@ setInterval(fetchStatus, 1500);
 
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden) {
-    fetchStatus();
+    fetchStatus().then(() => {
+      // Opening the popover mid-playback lands on the player surface, even
+      // when playback was started remotely (phone/PWA) while we sat in the
+      // grid. The grid icon is one tap away.
+      if (currentStatus?.isPlaying) {
+        showPlayer();
+      } else {
+        setTimeout(() => urlInput.focus(), 50);
+      }
+    });
     fetchLibrary();
-    if (!currentStatus?.isPlaying) {
-      setTimeout(() => urlInput.focus(), 50);
-    }
   }
 });

@@ -34,6 +34,9 @@ final class AudioPlayer: ObservableObject {
     let assetOptions: [String: Any]? = headers.isEmpty ? nil : ["AVURLAssetHTTPHeaderFieldsKey": headers]
     let asset = AVURLAsset(url: url, options: assetOptions)
     let item = AVPlayerItem(asset: asset)
+    // Start once ~15s is buffered instead of gulping whole mid-size files
+    // (a 57MB track otherwise takes ~10s of full download before playing).
+    item.preferredForwardBufferDuration = 15
     let p = AVPlayer(playerItem: item)
 
     teardownObservers()

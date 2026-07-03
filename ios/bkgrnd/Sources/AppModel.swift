@@ -90,8 +90,31 @@ final class AppModel: ObservableObject {
     await client.updateConfig(.init(baseURL: baseURL, bearerToken: bearerToken.isEmpty ? nil : bearerToken))
   }
 
+  // Per-scope ordering: Remote mirrors the Mac's canonical order exactly;
+  // Recent re-sorts by plays made on THIS phone (server order as tiebreak).
+  private var localPlayHistory: [String: Date] = {
+    (UserDefaults.standard.dictionary(forKey: "localPlayHistory") as? [String: Double])?
+      .mapValues { Date(timeIntervalSince1970: $0) } ?? [:]
+  }()
+
+  private func recordLocalPlay(_ url: String) {
+    localPlayHistory[url] = Date()
+    UserDefaults.standard.set(localPlayHistory.mapValues { $0.timeIntervalSince1970 }, forKey: "localPlayHistory")
+  }
+
   var gridItems: [PlaylistItem] {
-    recentPlaylist?.items ?? []
+    let base = recentPlaylist?.items ?? []
+    guard scope == .recent, !localPlayHistory.isEmpty else { return base }
+    return base.enumerated().sorted { a, b in
+      let pa = localPlayHistory[a.element.url]
+      let pb = localPlayHistory[b.element.url]
+      switch (pa, pb) {
+      case let (.some(da), .some(db)): return da > db
+      case (.some, .none): return true
+      case (.none, .some): return false
+      case (.none, .none): return a.offset < b.offset
+      }
+    }.map(\.element)
   }
 
   func refreshPlaylists() async {
@@ -177,43 +200,9 @@ final class AppModel: ObservableObject {
     let headers = await client.streamHeaders()
     await audioPlayer.play(url: stream, headers: headers, title: item.title, artist: item.channel ?? "", artworkURL: item.thumbnail)
     statusMessage = ""
-    bumpPlaylistOrder(item)
+    recordLocalPlay(item.url)
+    objectWillChange.send() // re-sort the Recent grid
     prewarmNext()
-  }
-
-  /// Recency ordering, mirroring the menubar's save_item: move the played
-  /// item to the front of the canonical playlist and push it to the server
-  /// (the Mac adopts newer remote docs on its next sync).
-  private func bumpPlaylistOrder(_ item: PlaylistItem) {
-    guard var doc = playlists, !doc.playlists.isEmpty else { return }
-    let index = doc.playlists.firstIndex(where: { ["streams", "recent", "recent-mixes"].contains($0.id) }) ?? 0
-
-    var list = doc.playlists[index]
-    if list.items.first?.url == item.url { return } // already front
-    list.items.removeAll { $0.url == item.url }
-    var entry = item
-    if entry.addedAt == nil || entry.addedAt?.isEmpty == true {
-      entry.addedAt = Self.isoNow()
-    }
-    list.items.insert(entry, at: 0)
-    if list.items.count > 50 { list.items.removeLast(list.items.count - 50) }
-    doc.playlists[index] = list
-    doc.updatedAt = Self.isoNow()
-
-    playlists = doc
-    recentPlaylist = list
-
-    Task { [doc] in
-      try? await client.putPlaylists(doc)
-    }
-  }
-
-  private static func isoNow() -> String {
-    let formatter = DateFormatter()
-    formatter.locale = Locale(identifier: "en_US_POSIX")
-    formatter.timeZone = TimeZone(identifier: "UTC")
-    formatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'"
-    return formatter.string(from: Date())
   }
 
   private func prewarmNext() {
