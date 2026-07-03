@@ -184,6 +184,7 @@ final class AppModel: ObservableObject {
     queueTitle = ""
     queueArtwork = nil
     pendingNextIndex = nil
+    showStage = true
     await startPlayback(item)
   }
 
@@ -392,6 +393,7 @@ final class AppModel: ObservableObject {
       ))
       recordAppPlay(item.url)
       await refreshRemoteStatus()
+      showStage = true
     } catch {
       lastRemoteError = error.localizedDescription
     }
