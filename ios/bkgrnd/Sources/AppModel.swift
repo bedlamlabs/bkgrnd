@@ -23,8 +23,17 @@ final class AppModel: ObservableObject {
   @Published var queue: [PlaylistItem] = []
   @Published var queueIndex: Int = -1
   @Published var queueTitle: String = ""
+  /// Playlist-level artwork (e.g. the Spotify playlist cover) — when set, the
+  /// stage/ribbon/island show this instead of per-track YouTube art.
+  @Published var queueArtwork: String?
+  @Published var shuffleEnabled = false
   @Published var statusMessage: String = ""
   @Published var showStage = false
+
+  /// Artwork the UI should show for current playback.
+  var displayArtwork: String? {
+    queueArtwork ?? nowPlaying?.thumbnail
+  }
 
   @Published var searchQuery = ""
   @Published var searchResults: [PlaylistItem] = []
@@ -58,24 +67,21 @@ final class AppModel: ObservableObject {
     client = WOPRClient(config: .init(baseURL: url, bearerToken: storedToken.isEmpty ? nil : storedToken))
 
     audioPlayer.onItemEnded = { [weak self] in
-      // Queue exhausted (single track, or nothing pre-enqueued in time).
-      // If there IS a next track, fall back to a fresh start on it.
+      // Queue exhausted, or nothing was pre-enqueued in time — advanceQueue
+      // picks the next target (shuffle-aware) or stops cleanly.
       guard let self else { return }
-      if self.queue.indices.contains(self.queueIndex + 1) {
-        Task { await self.advanceQueue(by: 1) }
-      } else {
-        self.stopLocal()
-      }
+      Task { await self.advanceQueue(by: 1) }
     }
     audioPlayer.onAdvanced = { [weak self] in
       guard let self else { return }
-      let next = self.queueIndex + 1
+      let next = self.pendingNextIndex ?? (self.queueIndex + 1)
+      self.pendingNextIndex = nil
       guard self.queue.indices.contains(next) else { return }
       self.queueIndex = next
       let item = self.queue[next]
       self.nowPlaying = item
       self.recordAppPlay(item.url)
-      self.audioPlayer.setNowPlayingMeta(title: item.title, artist: item.channel ?? "", artworkURL: item.thumbnail)
+      self.audioPlayer.setNowPlayingMeta(title: item.title, artist: item.channel ?? "", artworkURL: self.displayArtwork)
       self.enqueueUpcoming()
     }
     audioPlayer.onSkipRequested = { [weak self] forward in
@@ -176,6 +182,8 @@ final class AppModel: ObservableObject {
     queue = [item]
     queueIndex = 0
     queueTitle = ""
+    queueArtwork = nil
+    pendingNextIndex = nil
     await startPlayback(item)
   }
 
@@ -199,6 +207,8 @@ final class AppModel: ObservableObject {
       queue = [firstItem]
       queueIndex = 0
       queueTitle = first.title
+      queueArtwork = first.thumbnail.isEmpty ? nil : first.thumbnail
+      pendingNextIndex = nil
       await startPlayback(firstItem)
     } catch {
       guard generation == playGeneration else { return }
@@ -230,7 +240,7 @@ final class AppModel: ObservableObject {
     await client.prewarm(sourceURL: url)
     let stream = await client.streamURL(for: url)
     let headers = await client.streamHeaders()
-    await audioPlayer.play(url: stream, headers: headers, title: item.title, artist: item.channel ?? "", artworkURL: item.thumbnail)
+    await audioPlayer.play(url: stream, headers: headers, title: item.title, artist: item.channel ?? "", artworkURL: displayArtwork ?? item.thumbnail)
     statusMessage = ""
     recordAppPlay(item.url)
     enqueueUpcoming()
@@ -240,27 +250,59 @@ final class AppModel: ObservableObject {
   /// cross the track boundary with no app-side work (the app gets suspended
   /// if it needs the network right when the session goes silent).
   private var lastRecoveryURL: String?
-  private func enqueueUpcoming() {
+  /// The index the pre-enqueued item corresponds to (shuffle picks ahead).
+  private var pendingNextIndex: Int?
+
+  private func chooseNextIndex() -> Int? {
+    if shuffleEnabled, queue.count > 1 {
+      var candidate = queueIndex
+      while candidate == queueIndex {
+        candidate = Int.random(in: 0..<queue.count)
+      }
+      return candidate
+    }
     let next = queueIndex + 1
-    guard queue.indices.contains(next), let url = URL(string: queue[next].url) else { return }
+    return queue.indices.contains(next) ? next : nil
+  }
+
+  func toggleShuffle() {
+    shuffleEnabled.toggle()
+    // Re-pick and replace the pre-enqueued track under the new mode.
+    pendingNextIndex = nil
+    enqueueUpcoming()
+  }
+
+  private func enqueueUpcoming() {
+    guard let next = pendingNextIndex ?? chooseNextIndex(),
+          queue.indices.contains(next),
+          let url = URL(string: queue[next].url)
+    else { return }
+    pendingNextIndex = next
+    let expected = queue[next].url
     Task {
       await client.prewarm(sourceURL: url)
       let stream = await client.streamURL(for: url)
       let headers = await client.streamHeaders()
-      // Queue may have changed while resolving.
-      guard queue.indices.contains(queueIndex + 1), queue[queueIndex + 1].url == queue[next].url else { return }
+      // Queue/mode may have changed while resolving.
+      guard pendingNextIndex == next, queue.indices.contains(next), queue[next].url == expected else { return }
       audioPlayer.enqueueNext(url: stream, headers: headers)
     }
   }
 
   func advanceQueue(by step: Int) async {
-    let next = queueIndex + step
-    guard queue.indices.contains(next) else {
+    let target: Int?
+    if step > 0 {
+      target = pendingNextIndex ?? chooseNextIndex()
+    } else {
+      target = queueIndex > 0 ? queueIndex - 1 : nil
+    }
+    pendingNextIndex = nil
+    guard let target, queue.indices.contains(target) else {
       if step > 0 { stopLocal() }
       return
     }
-    queueIndex = next
-    await startPlayback(queue[next])
+    queueIndex = target
+    await startPlayback(queue[target])
   }
 
   func stopLocal() {
@@ -270,6 +312,8 @@ final class AppModel: ObservableObject {
     queue = []
     queueIndex = -1
     queueTitle = ""
+    queueArtwork = nil
+    pendingNextIndex = nil
     statusMessage = ""
     showStage = false
   }

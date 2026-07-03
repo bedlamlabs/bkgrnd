@@ -24,7 +24,7 @@ struct MiniPlayerBar: View {
   }
 
   private var artURL: String? {
-    isLocal ? appModel.nowPlaying?.thumbnail : appModel.remotePlayerStatus?.thumbnail
+    isLocal ? appModel.displayArtwork : appModel.remotePlayerStatus?.thumbnail
   }
 
   private var isPaused: Bool {

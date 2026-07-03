@@ -24,7 +24,7 @@ struct NowPlayingView: View {
   }
 
   private var artURL: String? {
-    if isLocal { return appModel.nowPlaying?.thumbnail }
+    if isLocal { return appModel.displayArtwork }
     let thumb = appModel.remotePlayerStatus?.thumbnail
     return (thumb?.isEmpty == false) ? thumb : nil
   }
@@ -121,7 +121,7 @@ struct NowPlayingView: View {
   }
 
   private var progressBlock: some View {
-    VStack(spacing: 6) {
+    VStack(spacing: 2) {
       StageRail(
         position: position,
         duration: duration,
@@ -129,8 +129,23 @@ struct NowPlayingView: View {
       )
       HStack {
         Text(formatClock(position))
+          .frame(width: 64, alignment: .leading)
+        Spacer()
+        if isLocal && appModel.queue.count > 1 {
+          Button { appModel.toggleShuffle() } label: {
+            Image(systemName: "shuffle")
+              .font(.system(size: 13, weight: .bold))
+              .foregroundStyle(appModel.shuffleEnabled ? Theme.brass : Color.white.opacity(0.45))
+              .frame(width: 44, height: 30)
+              .background(
+                appModel.shuffleEnabled ? Theme.brass.opacity(0.16) : Color.clear,
+                in: Capsule()
+              )
+          }
+        }
         Spacer()
         Text(duration > 0 ? formatClock(duration) : "--:--")
+          .frame(width: 64, alignment: .trailing)
       }
       .font(.system(size: 11.5, weight: .semibold))
       .monospacedDigit()
@@ -299,36 +314,48 @@ private struct StageArtImage<Content: View>: View {
   }
 }
 
-/// Brass progress rail with optional drag-to-seek.
+/// Brass progress rail with live drag-to-seek: the knob follows the finger
+/// and the seek commits on release.
 private struct StageRail: View {
   let position: Double
   let duration: Double
   let onSeek: ((Double) -> Void)?
 
+  @State private var dragFraction: Double?
+
   var body: some View {
     GeometryReader { proxy in
-      let fraction = duration > 0 ? min(max(position / duration, 0), 1) : 0
+      let playFraction = duration > 0 ? min(max(position / duration, 0), 1) : 0
+      let fraction = dragFraction ?? playFraction
       ZStack(alignment: .leading) {
         Capsule().fill(Color.white.opacity(0.22)).frame(height: 3)
         Capsule().fill(Theme.brass).frame(width: proxy.size.width * fraction, height: 3)
         Circle()
           .fill(Theme.brass)
-          .frame(width: 13, height: 13)
-          .background(Circle().fill(Theme.brass.opacity(0.22)).frame(width: 21, height: 21))
-          .offset(x: proxy.size.width * fraction - 6.5)
+          .frame(width: dragFraction != nil ? 17 : 13, height: dragFraction != nil ? 17 : 13)
+          .background(Circle().fill(Theme.brass.opacity(0.22)).frame(width: 25, height: 25))
+          .offset(x: proxy.size.width * fraction - 8)
       }
-      .frame(height: 23)
+      .frame(maxHeight: .infinity)
       .contentShape(Rectangle())
-      .gesture(
+      .highPriorityGesture(
         DragGesture(minimumDistance: 0)
+          .onChanged { value in
+            guard onSeek != nil, duration > 0 else { return }
+            dragFraction = min(max(value.location.x / proxy.size.width, 0), 1)
+          }
           .onEnded { value in
-            guard let onSeek, duration > 0 else { return }
+            guard let onSeek, duration > 0 else {
+              dragFraction = nil
+              return
+            }
             let fraction = min(max(value.location.x / proxy.size.width, 0), 1)
             onSeek(duration * fraction)
+            dragFraction = nil
           }
       )
     }
-    .frame(height: 23)
+    .frame(height: 34)
   }
 }
 
