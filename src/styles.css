@@ -280,6 +280,14 @@ button { cursor: pointer; }
 .control.saved { color: var(--blue); }
 .control.unsaved { color: rgba(255, 255, 255, 0.65); }
 
+.control.shuffle { color: rgba(255, 255, 255, 0.5); }
+.control.shuffle.on {
+  color: #d8a75b;
+  background: rgba(216, 167, 91, 0.14);
+}
+
+.bar.seekable { cursor: pointer; }
+
 /* ── Playlist grid (A3) ──────────────────────────────────────────────── */
 
 .playlist-grid {

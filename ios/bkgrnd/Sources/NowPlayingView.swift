@@ -86,12 +86,13 @@ struct NowPlayingView: View {
       if isLocal && appModel.queue.count > 1 {
         chip { Text("QUEUE · \(appModel.queue.count)") }
       }
-      if let urlString = isLocal ? appModel.nowPlaying?.url : appModel.remotePlayerStatus?.sourceUrl,
-         let url = URL(string: urlString) {
-        ShareLink(item: url) {
-          ghostIcon("square.and.arrow.up")
-        }
-      }
+      AirPlayRoutePicker()
+        .frame(width: 20, height: 20)
+        .padding(6)
+        .background(Color.black.opacity(0.28), in: Circle())
+        .overlay(Circle().stroke(Color.white.opacity(0.14), lineWidth: 1))
+        .opacity(isLocal ? 1 : 0.3)
+        .disabled(!isLocal)
       Button { dismiss() } label: {
         ghostIcon("square.grid.2x2")
       }
@@ -129,23 +130,8 @@ struct NowPlayingView: View {
       )
       HStack {
         Text(formatClock(position))
-          .frame(width: 64, alignment: .leading)
-        Spacer()
-        if isLocal && appModel.queue.count > 1 {
-          Button { appModel.toggleShuffle() } label: {
-            Image(systemName: "shuffle")
-              .font(.system(size: 13, weight: .bold))
-              .foregroundStyle(appModel.shuffleEnabled ? Theme.brass : Color.white.opacity(0.45))
-              .frame(width: 44, height: 30)
-              .background(
-                appModel.shuffleEnabled ? Theme.brass.opacity(0.16) : Color.clear,
-                in: Capsule()
-              )
-          }
-        }
         Spacer()
         Text(duration > 0 ? formatClock(duration) : "--:--")
-          .frame(width: 64, alignment: .trailing)
       }
       .font(.system(size: 11.5, weight: .semibold))
       .monospacedDigit()
@@ -202,9 +188,20 @@ struct NowPlayingView: View {
 
       Spacer()
 
-      AirPlayRoutePicker()
-        .frame(width: 46, height: 46)
-        .opacity(isLocal ? 1 : 0.3)
+      Button {
+        if isLocal { appModel.toggleShuffle() }
+      } label: {
+        Image(systemName: "shuffle")
+          .font(.system(size: 17, weight: .semibold))
+          .foregroundStyle(appModel.shuffleEnabled ? Theme.brass : Color.white.opacity(0.55))
+          .frame(width: 46, height: 46)
+          .background(
+            appModel.shuffleEnabled ? Theme.brass.opacity(0.16) : Color.clear,
+            in: Circle()
+          )
+      }
+      .opacity(isLocal ? 1 : 0.3)
+      .disabled(!isLocal)
     }
     .padding(.top, 22)
   }

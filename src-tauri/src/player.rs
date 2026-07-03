@@ -24,6 +24,7 @@ pub struct PlayerStatus {
     pub channel: String,
     pub duration: Option<f64>,
     pub position: Option<f64>,
+    pub shuffle: bool,
 }
 
 impl PlayerStatus {
@@ -42,12 +43,17 @@ impl PlayerStatus {
             channel: String::new(),
             duration: None,
             position: None,
+            shuffle: false,
         }
     }
 }
 
 pub struct PlayerState {
     pub session: Option<MpvSession>,
+    // Queue-level artwork (e.g. the Spotify playlist cover) shown instead of
+    // per-track art while this queue plays.
+    pub queue_artwork: Option<String>,
+    pub shuffle: bool,
     // Bumped every time `session` is installed or torn down by an owner
     // action. Exit-watcher tasks capture the value at spawn and exit when it
     // changes, so a watcher from a previous session can never reap (or
@@ -67,6 +73,8 @@ impl PlayerState {
     pub fn new() -> Self {
         PlayerState {
             session: None,
+            queue_artwork: None,
+            shuffle: false,
             session_gen: 0,
             queue_epoch: 0,
             queue: Vec::new(),
@@ -129,6 +137,7 @@ pub async fn play(url: &str, app: AppHandle, state: SharedState) -> Result<Playe
             s.queue_epoch += 1;
             s.queue = result.items;
             s.playlist_title = result.title;
+            s.queue_artwork = None;
         }
 
         play_queue_item(start_index, app, state.clone()).await?;
@@ -154,6 +163,7 @@ pub async fn play(url: &str, app: AppHandle, state: SharedState) -> Result<Playe
             }];
             s.queue_index = 0;
             s.playlist_title = String::new();
+            s.queue_artwork = None;
         }
 
         history::add_to_history(
@@ -244,6 +254,12 @@ async fn play_spotify(
         s.queue = vec![first_item.clone()];
         s.queue_index = 0;
         s.playlist_title = title;
+        // Queue-level cover: the Spotify playlist's own artwork.
+        s.queue_artwork = if source.thumbnail.is_empty() {
+            None
+        } else {
+            Some(source.thumbnail.clone())
+        };
         s.queue_epoch
     };
 
@@ -290,6 +306,116 @@ async fn play_spotify(
     get_status(state).await
 }
 
+
+enum AdvanceAction {
+    Index(usize),
+    RandomStream,
+}
+
+/// Cheap non-crypto randomness for shuffle picks (no rand dependency).
+fn random_index(len: usize, exclude: usize) -> usize {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.subsec_nanos() as usize)
+        .unwrap_or(0);
+    if len <= 1 {
+        return 0;
+    }
+    let mut pick = nanos % len;
+    if pick == exclude {
+        pick = (pick + 1) % len;
+    }
+    pick
+}
+
+/// What to do when a track finishes (or dies). Shuffle semantics:
+/// multi-track queues (converted playlists) shuffle within the queue and
+/// keep going; a lone stream with shuffle on hops to a random saved stream.
+/// Errors advance the same way successes do when shuffle is on.
+fn next_action(s: &PlayerState, clean_exit: bool) -> Option<AdvanceAction> {
+    let index = s.queue_index.max(0) as usize;
+    if s.queue.len() > 1 {
+        if s.shuffle {
+            return Some(AdvanceAction::Index(random_index(s.queue.len(), index)));
+        }
+        if clean_exit && index < s.queue.len() - 1 {
+            return Some(AdvanceAction::Index(index + 1));
+        }
+        return None;
+    }
+    if s.shuffle {
+        return Some(AdvanceAction::RandomStream);
+    }
+    None
+}
+
+/// Shuffle hop for single streams: pick a random saved stream and play it.
+async fn play_random_saved(app: AppHandle, state: SharedState) -> Result<(), String> {
+    let previous_url = {
+        let s = state.lock().await;
+        s.queue.first().map(|i| i.url.clone()).unwrap_or_default()
+    };
+
+    let doc = crate::playlists::load_or_derive_playlists();
+    let candidates: Vec<crate::playlists::PlaylistItem> = doc
+        .playlists
+        .into_iter()
+        .flat_map(|p| p.items)
+        .filter(|i| i.url != previous_url)
+        .collect();
+    if candidates.is_empty() {
+        return Err("No other saved streams to shuffle to".to_string());
+    }
+
+    for attempt in 0..candidates.len().min(5) {
+        let pick = &candidates[random_index(candidates.len(), usize::MAX) % candidates.len()];
+        let video_id = ytdlp::extract_video_id(&pick.url);
+        let item = PlaylistItem {
+            url: pick.url.clone(),
+            video_id: video_id.clone(),
+            title: pick.title.clone(),
+            thumbnail: if pick.thumbnail.is_empty() {
+                ytdlp::thumbnail_url(&video_id)
+            } else {
+                pick.thumbnail.clone()
+            },
+            channel: pick.channel.clone(),
+            duration: pick.duration,
+        };
+
+        {
+            let mut s = state.lock().await;
+            s.queue_epoch += 1;
+            s.queue = vec![item];
+            s.queue_index = 0;
+            s.playlist_title = String::new();
+            s.queue_artwork = None;
+        }
+        match play_queue_item(0, app.clone(), state.clone()).await {
+            Ok(()) => return Ok(()),
+            Err(err) => {
+                eprintln!("[player] shuffle pick failed (attempt {}): {}", attempt + 1, err);
+            }
+        }
+    }
+    Err("Shuffle could not start any saved stream".to_string())
+}
+
+pub async fn set_shuffle(enabled: bool, state: SharedState) -> Result<PlayerStatus, String> {
+    {
+        let mut s = state.lock().await;
+        s.shuffle = enabled;
+    }
+    get_status(state).await
+}
+
+pub async fn seek_absolute(seconds: f64, state: SharedState) -> Result<PlayerStatus, String> {
+    let ipc_path = session_ipc_path(&state).await?;
+    mpv::seek_absolute(&ipc_path, seconds).await?;
+    get_status(state).await
+}
+
 /// Install a freshly spawned mpv session and start its exit watcher. The
 /// watcher owns exactly this session (via session_gen) and handles both
 /// reaping and queue auto-advance.
@@ -313,7 +439,7 @@ async fn install_session(
         loop {
             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
-            let advance_from = {
+            let action = {
                 let mut s = state_clone.lock().await;
                 if s.session_gen != gen {
                     return; // session replaced; a newer watcher owns it
@@ -323,10 +449,10 @@ async fn install_session(
                         Ok(Some(status)) => {
                             let code = status.code().unwrap_or(-1);
                             s.session = None;
-                            if code == 0 && s.queue_index >= 0 {
-                                Some((s.queue_index + 1) as usize)
-                            } else {
+                            if s.queue_index < 0 {
                                 None
+                            } else {
+                                next_action(&s, code == 0)
                             }
                         }
                         Ok(None) => continue,
@@ -336,26 +462,41 @@ async fn install_session(
                 }
             };
 
-            if let Some(start) = advance_from {
-                // Try successive queue entries until one plays; a single dead
-                // video must not end the whole queue.
-                let mut index = start;
-                loop {
-                    let in_bounds = {
-                        let s = state_clone.lock().await;
-                        index < s.queue.len()
-                    };
-                    if !in_bounds {
-                        break;
-                    }
-                    match play_queue_item(index, app_clone.clone(), state_clone.clone()).await {
-                        Ok(()) => break,
-                        Err(err) => {
-                            eprintln!("[player] auto-advance skipping index {}: {}", index, err);
-                            index += 1;
+            match action {
+                Some(AdvanceAction::Index(start)) => {
+                    // Try successive picks until one plays; a single dead
+                    // video must not end the whole queue.
+                    let mut index = start;
+                    let mut attempts = 0;
+                    loop {
+                        attempts += 1;
+                        if attempts > 10 {
+                            break;
+                        }
+                        let (in_bounds, shuffle, len, current) = {
+                            let s = state_clone.lock().await;
+                            (index < s.queue.len(), s.shuffle, s.queue.len(), s.queue_index)
+                        };
+                        if !in_bounds {
+                            break;
+                        }
+                        match play_queue_item(index, app_clone.clone(), state_clone.clone()).await {
+                            Ok(()) => break,
+                            Err(err) => {
+                                eprintln!("[player] auto-advance skipping index {}: {}", index, err);
+                                index = if shuffle && len > 1 {
+                                    random_index(len, current.max(0) as usize)
+                                } else {
+                                    index + 1
+                                };
+                            }
                         }
                     }
                 }
+                Some(AdvanceAction::RandomStream) => {
+                    let _ = play_random_saved(app_clone.clone(), state_clone.clone()).await;
+                }
+                None => {}
             }
             return;
         }
@@ -394,20 +535,30 @@ fn play_queue_item(
 }
 
 pub async fn play_next(app: AppHandle, state: SharedState) -> Result<PlayerStatus, String> {
-    let next_index = {
+    let action = {
         let s = state.lock().await;
-        let next = s.queue_index + 1;
-        if (next as usize) < s.queue.len() {
-            Some(next as usize)
+        if s.shuffle {
+            next_action(&s, true)
         } else {
-            None
+            let next = s.queue_index + 1;
+            if (next as usize) < s.queue.len() {
+                Some(AdvanceAction::Index(next as usize))
+            } else {
+                None
+            }
         }
     };
 
-    if let Some(idx) = next_index {
-        play_queue_item(idx, app, state.clone()).await?;
-    } else {
-        stop(state.clone()).await?;
+    match action {
+        Some(AdvanceAction::Index(idx)) => {
+            play_queue_item(idx, app, state.clone()).await?;
+        }
+        Some(AdvanceAction::RandomStream) => {
+            play_random_saved(app, state.clone()).await?;
+        }
+        None => {
+            stop(state.clone()).await?;
+        }
     }
     get_status(state).await
 }
@@ -457,6 +608,7 @@ pub async fn stop(state: SharedState) -> Result<PlayerStatus, String> {
         s.queue_index = -1;
         s.playlist_title.clear();
         s.current_title.clear();
+        s.queue_artwork = None;
     }
     get_status(state).await
 }
@@ -509,8 +661,10 @@ pub async fn get_status(state: SharedState) -> Result<PlayerStatus, String> {
         is_paused: snapshot.paused,
         title: s.current_title.clone(),
         mode: Some("ytdlp".to_string()),
-        thumbnail: current_item
-            .map(|i| i.thumbnail.clone())
+        thumbnail: s
+            .queue_artwork
+            .clone()
+            .or_else(|| current_item.map(|i| i.thumbnail.clone()))
             .unwrap_or_default(),
         video_id: current_item.map(|i| i.video_id.clone()).unwrap_or_default(),
         source_url: current_item.map(|i| i.url.clone()).unwrap_or_default(),
@@ -526,5 +680,6 @@ pub async fn get_status(state: SharedState) -> Result<PlayerStatus, String> {
             .and_then(|i| i.duration)
             .or(snapshot.duration),
         position: snapshot.position,
+        shuffle: s.shuffle,
     })
 }

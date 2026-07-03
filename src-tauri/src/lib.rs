@@ -166,6 +166,22 @@ async fn seek_relative(
 }
 
 #[tauri::command]
+async fn seek_absolute(
+    seconds: f64,
+    state: tauri::State<'_, SharedState>,
+) -> Result<PlayerStatus, String> {
+    player::seek_absolute(seconds, state.inner().clone()).await
+}
+
+#[tauri::command]
+async fn set_shuffle(
+    enabled: bool,
+    state: tauri::State<'_, SharedState>,
+) -> Result<PlayerStatus, String> {
+    player::set_shuffle(enabled, state.inner().clone()).await
+}
+
+#[tauri::command]
 async fn set_volume(
     volume: f64,
     state: tauri::State<'_, SharedState>,
@@ -280,6 +296,8 @@ pub fn run() {
             play_next,
             play_prev,
             seek_relative,
+            seek_absolute,
+            set_shuffle,
             set_volume,
             get_volume,
         ])

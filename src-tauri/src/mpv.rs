@@ -304,3 +304,16 @@ pub async fn seek(ipc_path: &str, seconds: f64) -> Result<(), String> {
     .await?;
     Ok(())
 }
+
+pub async fn seek_absolute(ipc_path: &str, seconds: f64) -> Result<(), String> {
+    mpv_command(
+        ipc_path,
+        &[
+            serde_json::json!("seek"),
+            serde_json::json!(seconds),
+            serde_json::json!("absolute"),
+        ],
+    )
+    .await?;
+    Ok(())
+}

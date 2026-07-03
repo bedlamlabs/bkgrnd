@@ -253,13 +253,25 @@ final class AppModel: ObservableObject {
   /// The index the pre-enqueued item corresponds to (shuffle picks ahead).
   private var pendingNextIndex: Int?
 
+  /// Shuffle semantics: converted playlists (multi-track queues) shuffle
+  /// within the queue and keep going; a lone stream with shuffle on hops to
+  /// a random saved stream (appended to the queue so pre-enqueue still works).
   private func chooseNextIndex() -> Int? {
-    if shuffleEnabled, queue.count > 1 {
-      var candidate = queueIndex
-      while candidate == queueIndex {
-        candidate = Int.random(in: 0..<queue.count)
+    if shuffleEnabled {
+      if queue.count > 1 {
+        var candidate = queueIndex
+        while candidate == queueIndex {
+          candidate = Int.random(in: 0..<queue.count)
+        }
+        return candidate
       }
-      return candidate
+      let currentURL = nowPlaying?.url
+      let candidates = (recentPlaylist?.items ?? []).filter { $0.url != currentURL }
+      if let pick = candidates.randomElement() {
+        queue.append(pick)
+        return queue.count - 1
+      }
+      return nil
     }
     let next = queueIndex + 1
     return queue.indices.contains(next) ? next : nil

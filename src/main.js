@@ -26,6 +26,8 @@ const elapsedTime = document.getElementById('elapsedTime');
 const durationTime = document.getElementById('durationTime');
 
 const bookmarkBtn = document.getElementById('bookmarkBtn');
+const shuffleBtn = document.getElementById('shuffleBtn');
+const progressBar = document.querySelector('#playerPanel .bar');
 const pauseBtn = document.getElementById('pauseBtn');
 const stopBtn = document.getElementById('stopBtn');
 const seekBackBtn = document.getElementById('seekBackBtn');
@@ -215,6 +217,7 @@ function updatePlayerSurface(status) {
     pauseBtn.setAttribute('aria-label', 'Pause');
   }
 
+  shuffleBtn.classList.toggle('on', Boolean(status.shuffle));
   syncBookmarkButton(status.sourceUrl);
 }
 
@@ -245,6 +248,7 @@ function renderCompactNow() {
 }
 
 function setProgress(position, duration) {
+  if (scrubbing) return; // the finger owns the bar until release
   const pos = numberOrNull(position);
   const dur = numberOrNull(duration);
   const pct = pos != null && dur != null && dur > 0
@@ -255,7 +259,50 @@ function setProgress(position, duration) {
   progressKnob.style.left = `${pct}%`;
   elapsedTime.textContent = formatDuration(pos) || '0:00';
   durationTime.textContent = formatDuration(dur) || '--:--';
+  progressBar.classList.toggle('seekable', Boolean(dur && dur > 0));
 }
+
+// Drag-to-seek on the progress bar: knob follows the pointer live, the seek
+// commits on release.
+let scrubbing = false;
+function scrubFraction(event) {
+  const rect = progressBar.getBoundingClientRect();
+  return Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
+}
+
+progressBar?.addEventListener('pointerdown', (event) => {
+  const dur = numberOrNull(currentStatus?.duration);
+  if (!dur || dur <= 0) return;
+  scrubbing = true;
+  progressBar.setPointerCapture(event.pointerId);
+  const frac = scrubFraction(event);
+  progressFill.style.width = `${frac * 100}%`;
+  progressKnob.style.left = `${frac * 100}%`;
+  elapsedTime.textContent = formatDuration(frac * dur) || '0:00';
+});
+
+progressBar?.addEventListener('pointermove', (event) => {
+  if (!scrubbing) return;
+  const dur = numberOrNull(currentStatus?.duration) || 0;
+  const frac = scrubFraction(event);
+  progressFill.style.width = `${frac * 100}%`;
+  progressKnob.style.left = `${frac * 100}%`;
+  if (dur > 0) elapsedTime.textContent = formatDuration(frac * dur) || '0:00';
+});
+
+progressBar?.addEventListener('pointerup', async (event) => {
+  if (!scrubbing) return;
+  scrubbing = false;
+  const dur = numberOrNull(currentStatus?.duration);
+  if (!dur || dur <= 0) return;
+  const frac = scrubFraction(event);
+  try {
+    const status = await invoke('seek_absolute', { seconds: frac * dur });
+    applyStatus(status);
+  } catch {}
+});
+
+progressBar?.addEventListener('pointercancel', () => { scrubbing = false; });
 
 function setMicroStatus(text) {
   if (microStatusText) microStatusText.textContent = text || '';
@@ -662,6 +709,12 @@ seekBackBtn.addEventListener('click', () => doSeek(-10));
 seekFwdBtn.addEventListener('click', () => doSeek(10));
 playlistBtn.addEventListener('click', () => showGrid({ focusInput: false }));
 bookmarkBtn.addEventListener('click', toggleCurrentSaved);
+shuffleBtn.addEventListener('click', async () => {
+  try {
+    const status = await invoke('set_shuffle', { enabled: !currentStatus?.shuffle });
+    applyStatus(status);
+  } catch {}
+});
 compactNow.addEventListener('click', showPlayer);
 
 restartBtn.addEventListener('click', () => {
