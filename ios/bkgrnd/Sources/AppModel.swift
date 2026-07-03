@@ -58,13 +58,41 @@ final class AppModel: ObservableObject {
     client = WOPRClient(config: .init(baseURL: url, bearerToken: storedToken.isEmpty ? nil : storedToken))
 
     audioPlayer.onItemEnded = { [weak self] in
-      Task { await self?.advanceQueue(by: 1) }
+      // Queue exhausted (single track, or nothing pre-enqueued in time).
+      // If there IS a next track, fall back to a fresh start on it.
+      guard let self else { return }
+      if self.queue.indices.contains(self.queueIndex + 1) {
+        Task { await self.advanceQueue(by: 1) }
+      } else {
+        self.stopLocal()
+      }
+    }
+    audioPlayer.onAdvanced = { [weak self] in
+      guard let self else { return }
+      let next = self.queueIndex + 1
+      guard self.queue.indices.contains(next) else { return }
+      self.queueIndex = next
+      let item = self.queue[next]
+      self.nowPlaying = item
+      self.recordAppPlay(item.url)
+      self.audioPlayer.setNowPlayingMeta(title: item.title, artist: item.channel ?? "", artworkURL: item.thumbnail)
+      self.enqueueUpcoming()
     }
     audioPlayer.onSkipRequested = { [weak self] forward in
       Task { await self?.advanceQueue(by: forward ? 1 : -1) }
     }
     audioPlayer.onPlaybackError = { [weak self] message in
-      self?.statusMessage = message
+      guard let self else { return }
+      self.statusMessage = message
+      // One recovery attempt with a fresh resolve (pre-enqueued stream URLs
+      // can rot if a track sat in the queue for hours).
+      if self.queue.indices.contains(self.queueIndex) {
+        let item = self.queue[self.queueIndex]
+        if self.lastRecoveryURL != item.url {
+          self.lastRecoveryURL = item.url
+          Task { await self.startPlayback(item) }
+        }
+      }
     }
   }
 
@@ -187,6 +215,8 @@ final class AppModel: ObservableObject {
         let currentURL = self.queue.indices.contains(self.queueIndex) ? self.queue[self.queueIndex].url : nil
         self.queue = items
         self.queueIndex = items.firstIndex(where: { $0.url == currentURL }) ?? 0
+        // Track 1 started with a single-item queue; arm the next track now.
+        self.enqueueUpcoming()
       }
     }
   }
@@ -203,13 +233,24 @@ final class AppModel: ObservableObject {
     await audioPlayer.play(url: stream, headers: headers, title: item.title, artist: item.channel ?? "", artworkURL: item.thumbnail)
     statusMessage = ""
     recordAppPlay(item.url)
-    prewarmNext()
+    enqueueUpcoming()
   }
 
-  private func prewarmNext() {
+  /// Pre-resolve and pre-enqueue the next queue track so AVQueuePlayer can
+  /// cross the track boundary with no app-side work (the app gets suspended
+  /// if it needs the network right when the session goes silent).
+  private var lastRecoveryURL: String?
+  private func enqueueUpcoming() {
     let next = queueIndex + 1
     guard queue.indices.contains(next), let url = URL(string: queue[next].url) else { return }
-    Task { await client.prewarm(sourceURL: url) }
+    Task {
+      await client.prewarm(sourceURL: url)
+      let stream = await client.streamURL(for: url)
+      let headers = await client.streamHeaders()
+      // Queue may have changed while resolving.
+      guard queue.indices.contains(queueIndex + 1), queue[queueIndex + 1].url == queue[next].url else { return }
+      audioPlayer.enqueueNext(url: stream, headers: headers)
+    }
   }
 
   func advanceQueue(by step: Int) async {

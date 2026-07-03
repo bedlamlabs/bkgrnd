@@ -4,57 +4,48 @@ import MediaPlayer
 import OSLog
 import UIKit
 
+/// AVQueuePlayer-based engine. The next queue track is pre-resolved and
+/// pre-enqueued so track transitions happen entirely inside AVFoundation —
+/// with zero app-side network work at the boundary. (Doing the resolve at
+/// AVPlayerItemDidPlayToEndTime got the app suspended mid-advance when
+/// backgrounded: the session goes silent the moment a track ends.)
 @MainActor
 final class AudioPlayer: ObservableObject {
   @Published private(set) var isPlaying = false
   @Published private(set) var currentTime: Double = 0
   @Published private(set) var duration: Double = 0
 
-  /// Fires when the current item plays to its end — drives queue auto-advance.
+  /// Fires when the queue is exhausted (last item played to its end).
   var onItemEnded: (() -> Void)?
+  /// Fires when playback auto-advanced into the pre-enqueued next item.
+  var onAdvanced: (() -> Void)?
   /// Fires on lock-screen/island prev-next taps.
   var onSkipRequested: ((_ forward: Bool) -> Void)?
   /// Fires with a human-readable message when the player item fails.
   var onPlaybackError: ((String) -> Void)?
 
   private let log = Logger(subsystem: "com.bedlamlabs.bkgrnd.ios", category: "player")
-  private var player: AVPlayer?
+  private let player = AVQueuePlayer()
   private var timeObserver: Any?
-  private var endObserver: NSObjectProtocol?
+  private var currentItemCancellable: AnyCancellable?
   private var statusCancellable: AnyCancellable?
   private var commandsConfigured = false
+  private var suppressItemCallbacks = false
+  private var enqueuedNextItem: AVPlayerItem?
 
   private var nowPlayingTitle = ""
   private var nowPlayingArtist = ""
   private var nowPlayingArtwork: MPMediaItemArtwork?
 
-  func play(url: URL, headers: [String: String], title: String, artist: String, artworkURL: String?) async {
-    configureAudioSession()
-
-    let assetOptions: [String: Any]? = headers.isEmpty ? nil : ["AVURLAssetHTTPHeaderFieldsKey": headers]
-    let asset = AVURLAsset(url: url, options: assetOptions)
-    let item = AVPlayerItem(asset: asset)
-    // Start once ~15s is buffered instead of gulping whole mid-size files
-    // (a 57MB track otherwise takes ~10s of full download before playing).
-    item.preferredForwardBufferDuration = 15
-    let p = AVPlayer(playerItem: item)
-
-    teardownObservers()
-    player = p
-    currentTime = 0
-    duration = 0
-    nowPlayingTitle = title
-    nowPlayingArtist = artist
-    nowPlayingArtwork = nil
-
-    timeObserver = p.addPeriodicTimeObserver(
+  init() {
+    timeObserver = player.addPeriodicTimeObserver(
       forInterval: CMTime(seconds: 1.0, preferredTimescale: 600),
       queue: DispatchQueue.main
-    ) { [weak self, weak p] (t: CMTime) in
+    ) { [weak self] (t: CMTime) in
       Task { @MainActor in
         guard let self else { return }
         self.currentTime = t.seconds
-        if let d = p?.currentItem?.duration.seconds, d.isFinite {
+        if let d = self.player.currentItem?.duration.seconds, d.isFinite {
           self.duration = d
         }
         // Keep the island/lock-screen scrubber honest.
@@ -62,18 +53,115 @@ final class AudioPlayer: ObservableObject {
       }
     }
 
-    endObserver = NotificationCenter.default.addObserver(
-      forName: .AVPlayerItemDidPlayToEndTime,
-      object: item,
-      queue: .main
-    ) { [weak self] _ in
+    currentItemCancellable = player.publisher(for: \.currentItem).sink { [weak self] item in
       Task { @MainActor in
-        guard let self else { return }
-        self.isPlaying = false
-        self.onItemEnded?()
+        guard let self, !self.suppressItemCallbacks else { return }
+        if item == nil {
+          // Last item played out (or failed away) — the queue is done.
+          self.isPlaying = false
+          self.onItemEnded?()
+        } else if let item, item === self.enqueuedNextItem {
+          // AVQueuePlayer advanced into the pre-enqueued next track.
+          self.enqueuedNextItem = nil
+          self.currentTime = 0
+          self.duration = 0
+          self.observeStatus(of: item)
+          self.onAdvanced?()
+        }
       }
     }
+  }
 
+  private func makeItem(url: URL, headers: [String: String]) -> AVPlayerItem {
+    let assetOptions: [String: Any]? = headers.isEmpty ? nil : ["AVURLAssetHTTPHeaderFieldsKey": headers]
+    let asset = AVURLAsset(url: url, options: assetOptions)
+    let item = AVPlayerItem(asset: asset)
+    // Start once ~15s is buffered instead of gulping whole mid-size files.
+    item.preferredForwardBufferDuration = 15
+    return item
+  }
+
+  func play(url: URL, headers: [String: String], title: String, artist: String, artworkURL: String?) async {
+    configureAudioSession()
+
+    suppressItemCallbacks = true
+    player.removeAllItems()
+    enqueuedNextItem = nil
+    let item = makeItem(url: url, headers: headers)
+    player.insert(item, after: nil)
+    suppressItemCallbacks = false
+
+    currentTime = 0
+    duration = 0
+    setNowPlayingMeta(title: title, artist: artist, artworkURL: artworkURL)
+    observeStatus(of: item)
+    setupRemoteCommands()
+
+    player.play()
+    isPlaying = true
+    pushNowPlayingInfo()
+  }
+
+  /// Pre-enqueue the next queue track so the transition needs no app work.
+  func enqueueNext(url: URL, headers: [String: String]) {
+    if let stale = enqueuedNextItem {
+      player.remove(stale)
+      enqueuedNextItem = nil
+    }
+    guard let current = player.currentItem else { return }
+    let item = makeItem(url: url, headers: headers)
+    guard player.canInsert(item, after: current) else { return }
+    player.insert(item, after: current)
+    enqueuedNextItem = item
+    log.info("pre-enqueued next track")
+  }
+
+  /// Update island/lock-screen metadata (used when auto-advancing).
+  func setNowPlayingMeta(title: String, artist: String, artworkURL: String?) {
+    nowPlayingTitle = title
+    nowPlayingArtist = artist
+    nowPlayingArtwork = nil
+    loadArtwork(artworkURL)
+    pushNowPlayingInfo()
+  }
+
+  func stop() {
+    suppressItemCallbacks = true
+    player.pause()
+    player.removeAllItems()
+    enqueuedNextItem = nil
+    suppressItemCallbacks = false
+    statusCancellable = nil
+    isPlaying = false
+    currentTime = 0
+    duration = 0
+    MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+  }
+
+  func togglePlayPause() {
+    guard player.currentItem != nil else { return }
+    if isPlaying {
+      player.pause()
+      isPlaying = false
+    } else {
+      player.play()
+      isPlaying = true
+    }
+    pushNowPlayingInfo()
+  }
+
+  func seek(to seconds: Double) {
+    guard player.currentItem != nil else { return }
+    player.seek(to: CMTime(seconds: max(seconds, 0), preferredTimescale: 600))
+    currentTime = max(seconds, 0)
+    pushNowPlayingInfo()
+  }
+
+  func skip(_ delta: Double) {
+    seek(to: currentTime + delta)
+  }
+
+  private func observeStatus(of item: AVPlayerItem) {
     statusCancellable = item.publisher(for: \.status).sink { [weak self, weak item] status in
       Task { @MainActor in
         guard let self else { return }
@@ -96,58 +184,6 @@ final class AudioPlayer: ObservableObject {
         }
       }
     }
-
-    setupRemoteCommands()
-    loadArtwork(artworkURL)
-
-    p.play()
-    isPlaying = true
-    pushNowPlayingInfo()
-  }
-
-  func stop() {
-    teardownObservers()
-    player?.pause()
-    player = nil
-    isPlaying = false
-    currentTime = 0
-    duration = 0
-    MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
-  }
-
-  func togglePlayPause() {
-    guard let p = player else { return }
-    if isPlaying {
-      p.pause()
-      isPlaying = false
-    } else {
-      p.play()
-      isPlaying = true
-    }
-    pushNowPlayingInfo()
-  }
-
-  func seek(to seconds: Double) {
-    guard let p = player else { return }
-    p.seek(to: CMTime(seconds: max(seconds, 0), preferredTimescale: 600))
-    currentTime = max(seconds, 0)
-    pushNowPlayingInfo()
-  }
-
-  func skip(_ delta: Double) {
-    seek(to: currentTime + delta)
-  }
-
-  private func teardownObservers() {
-    if let timeObserver {
-      player?.removeTimeObserver(timeObserver)
-      self.timeObserver = nil
-    }
-    if let endObserver {
-      NotificationCenter.default.removeObserver(endObserver)
-      self.endObserver = nil
-    }
-    statusCancellable = nil
   }
 
   private func configureAudioSession() {
