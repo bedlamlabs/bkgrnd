@@ -91,23 +91,25 @@ final class AppModel: ObservableObject {
   }
 
   // Per-scope ordering: Remote mirrors the Mac's canonical order exactly;
-  // Recent re-sorts by plays made on THIS phone (server order as tiebreak).
-  private var localPlayHistory: [String: Date] = {
+  // Recent re-sorts by plays made FROM THIS APP — local playback and
+  // remote-commanded alike (server order as tiebreak for never-played items).
+  private var appPlayHistory: [String: Date] = {
     (UserDefaults.standard.dictionary(forKey: "localPlayHistory") as? [String: Double])?
       .mapValues { Date(timeIntervalSince1970: $0) } ?? [:]
   }()
 
-  private func recordLocalPlay(_ url: String) {
-    localPlayHistory[url] = Date()
-    UserDefaults.standard.set(localPlayHistory.mapValues { $0.timeIntervalSince1970 }, forKey: "localPlayHistory")
+  private func recordAppPlay(_ url: String) {
+    appPlayHistory[url] = Date()
+    UserDefaults.standard.set(appPlayHistory.mapValues { $0.timeIntervalSince1970 }, forKey: "localPlayHistory")
+    objectWillChange.send() // re-sort the Recent grid
   }
 
   var gridItems: [PlaylistItem] {
     let base = recentPlaylist?.items ?? []
-    guard scope == .recent, !localPlayHistory.isEmpty else { return base }
+    guard scope == .recent, !appPlayHistory.isEmpty else { return base }
     return base.enumerated().sorted { a, b in
-      let pa = localPlayHistory[a.element.url]
-      let pb = localPlayHistory[b.element.url]
+      let pa = appPlayHistory[a.element.url]
+      let pb = appPlayHistory[b.element.url]
       switch (pa, pb) {
       case let (.some(da), .some(db)): return da > db
       case (.some, .none): return true
@@ -200,8 +202,7 @@ final class AppModel: ObservableObject {
     let headers = await client.streamHeaders()
     await audioPlayer.play(url: stream, headers: headers, title: item.title, artist: item.channel ?? "", artworkURL: item.thumbnail)
     statusMessage = ""
-    recordLocalPlay(item.url)
-    objectWillChange.send() // re-sort the Recent grid
+    recordAppPlay(item.url)
     prewarmNext()
   }
 
@@ -292,6 +293,7 @@ final class AppModel: ObservableObject {
         thumbnail: item.thumbnail ?? "",
         sourceUrl: item.url
       ))
+      recordAppPlay(item.url)
       await refreshRemoteStatus()
     } catch {
       lastRemoteError = error.localizedDescription
