@@ -400,7 +400,9 @@ async function loadLibrary() {
 
   recentItems = Array.isArray(historyDoc) ? historyDoc.map(normalizeItem) : [];
   const seen = new Set();
-  libraryItems = [...playlistItems, ...recentItems].filter((item) => {
+  // The feed is the user's saved (bookmarked) streams only, so removing a
+  // bookmark removes it from the feed. History is intentionally not merged in.
+  libraryItems = playlistItems.filter((item) => {
     if (!item.url || seen.has(item.url)) return false;
     seen.add(item.url);
     return true;
@@ -411,7 +413,7 @@ async function loadLibrary() {
 }
 
 function renderGrid() {
-  const items = libraryItems.length ? libraryItems : recentItems;
+  const items = libraryItems;
   const gridKey = JSON.stringify(items.slice(0, 24).map((item) => item.url));
   if (gridKey === lastGridKey) return;
   lastGridKey = gridKey;
