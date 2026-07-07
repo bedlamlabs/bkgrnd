@@ -16,7 +16,6 @@ const authUser = el("authUser");
 const authPass = el("authPass");
 const authMsg = el("authMsg");
 const authSubmit = el("authSubmit");
-const authToggle = el("authToggle");
 
 const homeView = el("homeView");
 const searchView = el("searchView");
@@ -140,7 +139,6 @@ function setAuthMode(mode) {
   const registering = mode === "register";
   authTitle.textContent = registering ? "Create account" : "Sign in";
   authSubmit.textContent = registering ? "Create account" : "Sign in";
-  authToggle.textContent = registering ? "Have an account? Sign in" : "Create an account";
   authPass.setAttribute("autocomplete", registering ? "new-password" : "current-password");
   setInline(authMsg, "");
 }
@@ -1212,7 +1210,6 @@ audio.addEventListener("error", () => {
 // ---- Wiring ---------------------------------------------------------------
 
 authSubmit.addEventListener("click", submitAuth);
-authToggle.addEventListener("click", () => setAuthMode(authMode === "login" ? "register" : "login"));
 authPass.addEventListener("keydown", (event) => {
   if (event.key === "Enter") submitAuth();
 });
