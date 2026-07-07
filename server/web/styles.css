@@ -759,6 +759,9 @@ button { font: inherit; color: inherit; cursor: pointer; }
 }
 .auth-card .input { height: 44px; }
 .auth-submit {
+  /* .primary-btn sets flex:1 for the horizontal dialog row; in this column
+     card that collapses the height, so opt out. */
+  flex: none;
   width: 100%;
   height: 54px;
   margin-top: 10px;
