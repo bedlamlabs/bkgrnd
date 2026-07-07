@@ -337,6 +337,13 @@ function ytThumbFromUrl(url) {
   return match ? `https://i.ytimg.com/vi/${match[1]}/mqdefault.jpg` : "";
 }
 
+// Dedup key: the YouTube video id, so a plain URL and its "&list=RD…" Mix
+// variant collapse to one feed entry. Non-YouTube URLs key on themselves.
+function videoKey(url) {
+  const match = String(url || "").match(/(?:v=|youtu\.be\/|\/shorts\/)([a-zA-Z0-9_-]{11})/);
+  return match ? match[1] : String(url || "");
+}
+
 function createArtwork(src, className = "mix-art") {
   const img = document.createElement("img");
   img.className = className;
@@ -403,8 +410,10 @@ async function loadLibrary() {
   // The feed is the user's saved (bookmarked) streams only, so removing a
   // bookmark removes it from the feed. History is intentionally not merged in.
   libraryItems = playlistItems.filter((item) => {
-    if (!item.url || seen.has(item.url)) return false;
-    seen.add(item.url);
+    if (!item.url) return false;
+    const key = videoKey(item.url);
+    if (seen.has(key)) return false;
+    seen.add(key);
     return true;
   });
 

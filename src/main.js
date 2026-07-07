@@ -341,10 +341,14 @@ function flattenPlaylistDoc(doc) {
     }
   }
 
+  // Dedup by YouTube video id so a plain URL and its "&list=RD…" Mix variant
+  // collapse to one entry. Non-YouTube URLs key on themselves.
   const seen = new Set();
   return items.filter((item) => {
-    if (!item.url || seen.has(item.url)) return false;
-    seen.add(item.url);
+    if (!item.url) return false;
+    const key = extractVideoId(item.url) || item.url;
+    if (seen.has(key)) return false;
+    seen.add(key);
     return true;
   });
 }

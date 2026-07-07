@@ -138,8 +138,21 @@ final class AppModel: ObservableObject {
     objectWillChange.send() // re-sort the Recent grid
   }
 
+  // Dedup key: the YouTube video id, so a plain URL and its "&list=RD…" Mix
+  // variant collapse to one grid entry. Non-YouTube URLs key on themselves.
+  private static let youtubeIdRegex = try! NSRegularExpression(pattern: "(?:v=|youtu\\.be/|/shorts/)([A-Za-z0-9_-]{11})")
+  private func videoKey(_ url: String) -> String {
+    let range = NSRange(url.startIndex..., in: url)
+    if let match = Self.youtubeIdRegex.firstMatch(in: url, range: range),
+       let idRange = Range(match.range(at: 1), in: url) {
+      return String(url[idRange])
+    }
+    return url
+  }
+
   var gridItems: [PlaylistItem] {
-    let base = recentPlaylist?.items ?? []
+    var seen = Set<String>()
+    let base = (recentPlaylist?.items ?? []).filter { seen.insert(videoKey($0.url)).inserted }
     guard scope == .recent, !appPlayHistory.isEmpty else { return base }
     return base.enumerated().sorted { a, b in
       let pa = appPlayHistory[a.element.url]
