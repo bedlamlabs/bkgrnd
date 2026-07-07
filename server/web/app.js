@@ -1,6 +1,6 @@
 const LS_BASE = "bkgrnd.web.baseUrl";
-const LS_TOKEN = "bkgrnd.web.token";
 const DEFAULT_BASE_URL = "https://bkgrnd.bedl.am";
+const DEFAULT_THEME_COLOR = "#0d0e11";
 const LEGACY_BASE_PATTERNS = [
   /wopr\.thriveos\.pro/i,
   /worp\.thriveos\.pro/i,
@@ -10,14 +10,18 @@ const LEGACY_BASE_PATTERNS = [
 
 const el = (id) => document.getElementById(id);
 
+const authView = el("authView");
+const authTitle = el("authTitle");
+const authUser = el("authUser");
+const authPass = el("authPass");
+const authMsg = el("authMsg");
+const authSubmit = el("authSubmit");
+const authToggle = el("authToggle");
+
 const homeView = el("homeView");
 const searchView = el("searchView");
 const playerView = el("playerView");
-const remoteScopeBtn = el("remoteScopeBtn");
-const localScopeBtn = el("localScopeBtn");
-const localActiveDot = el("localActiveDot");
 const openSearchBtn = el("openSearchBtn");
-const scopeStatus = el("scopeStatus");
 const mixGrid = el("mixGrid");
 
 const closeSearchBtn = el("closeSearchBtn");
@@ -29,6 +33,7 @@ const searchResults = el("searchResults");
 
 const closePlayerBtn = el("closePlayerBtn");
 const shareBtn = el("shareBtn");
+const castBtn = el("castBtn");
 const playerArt = el("playerArt");
 const playerArtFallback = el("playerArtFallback");
 const playerAmbient = el("playerAmbient");
@@ -55,12 +60,13 @@ const miniAction = el("miniAction");
 
 const settingsBtn = el("settingsBtn");
 const settings = el("settings");
+const settingsUser = el("settingsUser");
 const baseUrlInput = el("baseUrl");
-const tokenInput = el("token");
+const logoutBtn = el("logoutBtn");
+const themeColorMeta = document.querySelector('meta[name="theme-color"]');
 
 const audio = el("player");
 
-let activeScope = "remote";
 let libraryItems = [];
 let recentItems = [];
 let searchItems = [];
@@ -68,7 +74,6 @@ let remoteNow = null;
 let remoteQueue = [];
 let remoteQueueIndex = -1;
 let lastGridKey = "";
-let localState = { online: false, status: null };
 let activeStreamUrl = "";
 let activeSourceUrl = "";
 let activeSourceItem = null;
@@ -77,6 +82,8 @@ let remotePlayToken = 0;
 let playStartTimeout = null;
 let acquisitionTimer = null;
 let lastProgressAt = 0;
+let currentUser = "";
+let authMode = "login"; // or "register"
 const prewarmed = new Set();
 const prewarming = new Set();
 const failedPrewarm = new Set();
@@ -93,18 +100,6 @@ function getBaseUrl() {
   return normalized;
 }
 
-function getToken() {
-  return (localStorage.getItem(LS_TOKEN) || "").trim();
-}
-
-function withToken(url) {
-  const token = getToken();
-  if (!token) return url;
-  const next = new URL(url, window.location.href);
-  next.searchParams.set("token", token);
-  return next.toString();
-}
-
 function apiBaseHref() {
   const base = getBaseUrl();
   if (base) return base.endsWith("/") ? base : `${base}/`;
@@ -112,7 +107,13 @@ function apiBaseHref() {
 }
 
 function apiUrl(path) {
-  return withToken(new URL(path, apiBaseHref()).toString());
+  return new URL(path, apiBaseHref()).toString();
+}
+
+// Cookies carry auth now; `include` covers the configurable cross-origin base.
+function req(path, opts = {}) {
+  const url = /^https?:/i.test(path) ? path : apiUrl(path);
+  return fetch(url, { credentials: "include", cache: "no-store", ...opts });
 }
 
 function normalizeBaseUrl(raw) {
@@ -121,6 +122,97 @@ function normalizeBaseUrl(raw) {
   if (LEGACY_BASE_PATTERNS.some((pattern) => pattern.test(base))) return DEFAULT_BASE_URL;
   return base;
 }
+
+// ---- Auth -----------------------------------------------------------------
+
+function showAuth(message) {
+  authView.classList.add("active");
+  homeView.classList.remove("active");
+  searchView.classList.remove("active");
+  playerView.classList.remove("active");
+  setInline(authMsg, message || "");
+}
+
+function setAuthMode(mode) {
+  authMode = mode;
+  const registering = mode === "register";
+  authTitle.textContent = registering ? "Create account" : "Sign in";
+  authSubmit.textContent = registering ? "Create account" : "Sign in";
+  authToggle.textContent = registering ? "Have an account? Sign in" : "Create an account";
+  authPass.setAttribute("autocomplete", registering ? "new-password" : "current-password");
+  setInline(authMsg, "");
+}
+
+async function fetchMe() {
+  try {
+    const resp = await req("api/v1/pwa/me");
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch {
+    return null;
+  }
+}
+
+async function submitAuth() {
+  const username = authUser.value.trim();
+  const password = authPass.value;
+  if (!username || !password) {
+    setInline(authMsg, "Enter a username and password.");
+    return;
+  }
+  authSubmit.disabled = true;
+  setInline(authMsg, authMode === "register" ? "Creating account..." : "Signing in...");
+  const path = authMode === "register" ? "api/v1/pwa/register" : "api/v1/pwa/login";
+  try {
+    const resp = await req(path, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username, password })
+    });
+    if (!resp.ok) {
+      const text = (await resp.text()).trim();
+      setInline(authMsg, text || `Failed (${resp.status}).`);
+      return;
+    }
+    authPass.value = "";
+    await enterApp(username);
+  } catch {
+    setInline(authMsg, "Network error.");
+  } finally {
+    authSubmit.disabled = false;
+  }
+}
+
+async function logout() {
+  try {
+    await req("api/v1/pwa/logout", { method: "POST" });
+  } catch {}
+  stopRemote();
+  currentUser = "";
+  authUser.value = "";
+  authPass.value = "";
+  setAuthMode("login");
+  showAuth("Signed out.");
+}
+
+// Any API 401 mid-session (expired cookie) bounces back to the login screen.
+function onUnauthorized() {
+  if (!authView.classList.contains("active")) {
+    currentUser = "";
+    setAuthMode("login");
+    showAuth("Session expired — sign in again.");
+  }
+}
+
+async function enterApp(username) {
+  currentUser = username || currentUser;
+  authView.classList.remove("active");
+  homeView.classList.add("active");
+  settingsUser.textContent = currentUser || "—";
+  await loadLibrary();
+}
+
+// ---- Rendering helpers ----------------------------------------------------
 
 function setScreen(name) {
   homeView.classList.toggle("active", name === "home");
@@ -136,8 +228,6 @@ function setInline(node, text) {
 }
 
 function setPlayerStatus(text) {
-  // The stage status chip is always visible; fall back to the playback state
-  // when there's no transient message (resolving/buffering/errors).
   const label = String(text || "").replace(/\.+$/, "").trim().toLowerCase();
   const fallback = getCurrentNow() ? (isPaused() ? "paused" : "streaming") : "idle";
   if (playerStatusTag) playerStatusTag.textContent = label || fallback;
@@ -182,19 +272,6 @@ function formatDuration(seconds) {
   return `${mins}:${secs}`;
 }
 
-function scopeLabel() {
-  return activeScope === "local" ? "Remote" : "Recent";
-}
-
-function setScope(scope) {
-  activeScope = scope;
-  remoteScopeBtn.classList.toggle("active", scope === "remote");
-  localScopeBtn.classList.toggle("active", scope === "local");
-  searchScope.textContent = scopeLabel();
-  renderGrid();
-  renderMiniPlayer();
-}
-
 function escapeHtml(str) {
   const d = document.createElement("div");
   d.textContent = String(str || "");
@@ -210,7 +287,6 @@ function normalizeItem(raw) {
     url,
     channel: artist,
     thumbnail: raw?.thumbnail || ytThumbFromUrl(url),
-    // Live 24/7 streams report tiny/zero durations; only chip real ones.
     duration: Number.isFinite(duration) && duration > 60 ? duration : null,
     live: raw?.type === "stream"
   };
@@ -235,10 +311,7 @@ function inferArtistFromTitle(title) {
 
   const parts = text.split("|").map((part) => part.trim()).filter(Boolean);
   if (parts.length < 2) return "";
-  const candidate = parts
-    .slice(1)
-    .map(cleanArtist)
-    .find(isRealArtist);
+  const candidate = parts.slice(1).map(cleanArtist).find(isRealArtist);
   return candidate ? cleanArtist(candidate) : "";
 }
 
@@ -285,7 +358,7 @@ function thumbnailSrc(src) {
     if (url.hostname === "i.ytimg.com" || url.hostname.endsWith(".ytimg.com")) {
       const proxy = new URL("api/v1/thumbnail", apiBaseHref());
       proxy.searchParams.set("src", raw);
-      return withToken(proxy.toString());
+      return proxy.toString();
     }
   } catch {}
   return raw;
@@ -293,7 +366,11 @@ function thumbnailSrc(src) {
 
 async function fetchJson(path, fallback) {
   try {
-    const resp = await fetch(apiUrl(path), { cache: "no-store" });
+    const resp = await req(path);
+    if (resp.status === 401) {
+      onUnauthorized();
+      return fallback;
+    }
     if (!resp.ok) return fallback;
     return await resp.json();
   } catch {
@@ -328,31 +405,10 @@ async function loadLibrary() {
 }
 
 function renderGrid() {
-  const localStatus = localState.status;
-  const localPlaying = Boolean(localState.online && localStatus?.isPlaying);
-
-  // This runs on every 3s status poll; skip the full DOM rebuild (24 cards +
-  // images) when nothing it renders has actually changed.
   const items = libraryItems.length ? libraryItems : recentItems;
-  const gridKey = JSON.stringify([
-    activeScope,
-    localState.online,
-    localPlaying,
-    items.slice(0, 24).map((item) => item.url)
-  ]);
+  const gridKey = JSON.stringify(items.slice(0, 24).map((item) => item.url));
   if (gridKey === lastGridKey) return;
   lastGridKey = gridKey;
-
-  localActiveDot.classList.toggle("hidden", !localPlaying);
-
-  // Now-playing lives in the mini player ribbon; the status row only
-  // surfaces actionable state (Mac unreachable).
-  if (activeScope === "local" && !localState.online) {
-    scopeStatus.textContent = "Mac is unavailable. Open bkgrnd on the Mac to enable Remote.";
-    scopeStatus.classList.remove("hidden");
-  } else {
-    scopeStatus.classList.add("hidden");
-  }
 
   mixGrid.innerHTML = "";
   if (!items.length) {
@@ -388,10 +444,7 @@ function renderCard(item) {
   if (item.live) {
     artWrap.insertAdjacentHTML("beforeend", `<span class="live-chip">LIVE</span>`);
   } else if (item.duration) {
-    artWrap.insertAdjacentHTML(
-      "beforeend",
-      `<span class="dur-chip">${formatDurationChip(item.duration)}</span>`
-    );
+    artWrap.insertAdjacentHTML("beforeend", `<span class="dur-chip">${formatDurationChip(item.duration)}</span>`);
   }
 
   const body = document.createElement("div");
@@ -415,9 +468,9 @@ function renderResult(item) {
   button.insertAdjacentHTML("beforeend", `
     <div>
       <div class="mix-title">${escapeHtml(item.title)}</div>
-      <div class="mix-channel">${escapeHtml(item.channel || scopeLabel())}</div>
+      <div class="mix-channel">${escapeHtml(item.channel || "Recent")}</div>
     </div>
-    <div class="result-add">${activeScope === "local" ? "▶" : "+"}</div>
+    <div class="result-add">+</div>
   `);
   return button;
 }
@@ -442,12 +495,16 @@ async function search(query) {
   try {
     const url = new URL("api/v1/search", apiBaseHref());
     url.searchParams.set("q", q);
-    resp = await fetch(withToken(url.toString()), { cache: "no-store" });
+    resp = await req(url.toString());
   } catch {
     setInline(searchMsg, "Network error talking to WOPR.");
     return;
   }
 
+  if (resp.status === 401) {
+    onUnauthorized();
+    return;
+  }
   if (!resp.ok) {
     setInline(searchMsg, `Search failed (${resp.status}).`);
     return;
@@ -467,14 +524,9 @@ async function search(query) {
 }
 
 async function playItem(item) {
-  if (activeScope === "local") {
-    await sendLocalCommand("play", item);
-    await refreshLocalStatus();
-    setScreen("home");
-    return;
-  }
-  await playRemote(item);
-  setScreen("home");
+  const ok = await playRemote(item);
+  // On failure the item is pinned to the Now Playing stage; don't override it.
+  if (ok !== false) setScreen("home");
 }
 
 function isSpotifyUrl(url) {
@@ -483,25 +535,20 @@ function isSpotifyUrl(url) {
 
 async function playRemote(item) {
   if (isSpotifyUrl(item.url)) {
-    await playSpotifyRemote(item);
-    return;
+    return await playSpotifyRemote(item);
   }
   remoteQueue = [];
   remoteQueueIndex = -1;
-  await playRemoteTrack(item);
+  return await playRemoteTrack(item);
 }
 
-// Spotify URLs can't be resolved by yt-dlp; the server converts them into a
-// YouTube-backed queue which we then play with client-side auto-advance.
-// Two-phase: convert just the first track so audio starts in seconds, then
-// swap in the full queue when the complete conversion lands.
 let spotifyConversionToken = 0;
 
 async function fetchSpotifyQueue(sourceUrl, maxTracks) {
   const url = new URL("api/v1/spotify/queue", apiBaseHref());
   url.searchParams.set("url", sourceUrl);
   if (maxTracks) url.searchParams.set("max_tracks", String(maxTracks));
-  return fetch(withToken(url.toString()), { cache: "no-store" });
+  return req(url.toString());
 }
 
 async function playSpotifyRemote(item) {
@@ -519,6 +566,7 @@ async function playSpotifyRemote(item) {
   try {
     const resp = await fetchSpotifyQueue(item.url, 1);
     if (playToken !== remotePlayToken) return;
+    if (resp.status === 401) { onUnauthorized(); return; }
     if (!resp.ok) {
       const text = (await resp.text()).trim();
       console.warn("Spotify conversion failed", resp.status, text);
@@ -546,8 +594,6 @@ async function playSpotifyRemote(item) {
   remoteQueueIndex = 0;
   const firstPlay = playRemoteTrack(firstItems[0]);
 
-  // Phase 2: full conversion in the background; extend the queue in place
-  // unless the user has started a different conversion meanwhile.
   fetchSpotifyQueue(item.url)
     .then((resp) => (resp.ok ? resp.json() : null))
     .then((full) => {
@@ -590,8 +636,11 @@ async function playRemoteTrack(item) {
 
   startAcquisitionStatus(sourceUrl);
   const streamUrl = await resolveStreamUrl(sourceUrl);
-  if (playToken !== remotePlayToken) return;
-  if (!streamUrl) return;
+  if (playToken !== remotePlayToken) return true;
+  if (!streamUrl) {
+    markPlaybackFailed("couldn't play");
+    return false;
+  }
 
   activeSourceUrl = sourceUrl;
   activeStreamUrl = proxiedStreamUrl(sourceUrl);
@@ -611,13 +660,15 @@ async function playRemoteTrack(item) {
     cleanupFailedAudio();
     setPlayerStatus("tap");
   }
+  return true;
 }
 
-function proxiedStreamUrl(sourceUrl) {
+function proxiedStreamUrl(sourceUrl, castsig) {
   const proxyUrl = new URL("api/v1/stream", apiBaseHref());
   proxyUrl.searchParams.set("url", sourceUrl);
   proxyUrl.searchParams.set("proxy", "true");
-  return withToken(proxyUrl.toString());
+  if (castsig) proxyUrl.searchParams.set("castsig", castsig);
+  return proxyUrl.toString();
 }
 
 function resolveFailureStatus(resp, text) {
@@ -632,7 +683,8 @@ async function resolveStreamUrl(sourceUrl) {
   const url = new URL("api/v1/resolve", apiBaseHref());
   url.searchParams.set("url", sourceUrl);
   try {
-    const resp = await fetch(withToken(url.toString()), { cache: "no-store" });
+    const resp = await req(url.toString());
+    if (resp.status === 401) { onUnauthorized(); return ""; }
     if (!resp.ok) {
       const text = (await resp.text()).trim();
       console.warn("Stream resolve failed", resp.status, text);
@@ -662,6 +714,25 @@ async function resolveStreamUrl(sourceUrl) {
   }
 }
 
+// A stream that fails to start stays pinned in Now Playing (with the failure
+// visible) so it can be removed with the Stop control — there's otherwise no
+// handle on it once it's the active item.
+function markPlaybackFailed(reason) {
+  if (playStartTimeout) clearTimeout(playStartTimeout);
+  playStartTimeout = null;
+  stopAcquisitionStatus();
+  try {
+    audio.pause();
+    audio.removeAttribute("src");
+    audio.load();
+  } catch {}
+  activeStreamUrl = "";
+  setPlayerStatus(reason || "couldn't play");
+  renderMiniPlayer();
+  renderPlayer();
+  setScreen("player");
+}
+
 function cleanupFailedAudio() {
   if (playStartTimeout) clearTimeout(playStartTimeout);
   playStartTimeout = null;
@@ -673,7 +744,6 @@ function cleanupFailedAudio() {
 }
 
 function prewarmItems(items) {
-  if (activeScope !== "remote") return;
   for (const item of items) {
     prewarmStream(item.url);
   }
@@ -696,7 +766,7 @@ async function runPrewarmQueue() {
     const prewarmUrl = new URL("api/v1/prewarm", apiBaseHref());
     prewarmUrl.searchParams.set("url", url);
     try {
-      const resp = await fetch(withToken(prewarmUrl.toString()), { cache: "no-store" });
+      const resp = await req(prewarmUrl.toString());
       if (resp.ok) prewarmed.add(url);
       else failedPrewarm.add(url);
     } catch {
@@ -711,46 +781,7 @@ async function runPrewarmQueue() {
   prewarmRunning = false;
 }
 
-async function sendLocalCommand(action, item = {}) {
-  const body = {
-    action,
-    url: item.url || "",
-    title: item.title || "",
-    thumbnail: item.thumbnail || "",
-    sourceUrl: item.url || ""
-  };
-  try {
-    const resp = await fetch(apiUrl("api/v1/local/commands"), {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body)
-    });
-    if (!resp.ok) {
-      setPlayerStatus("error");
-    }
-  } catch {
-    setPlayerStatus("error");
-  }
-}
-
-async function refreshLocalStatus() {
-  localState = await fetchJson("api/v1/local/status", { online: false, status: null });
-  renderGrid();
-  renderMiniPlayer();
-  if (activeScope === "local") renderPlayer();
-}
-
 function getCurrentNow() {
-  if (activeScope === "local") {
-    const status = localState.status;
-    if (!localState.online || !status?.isPlaying) return null;
-    return normalizeItem({
-      title: status.title,
-      channel: status.playlistTitle || "Playing on Mac",
-      thumbnail: status.thumbnail,
-      url: status.sourceUrl
-    });
-  }
   return remoteNow;
 }
 
@@ -761,7 +792,7 @@ function renderMiniPlayer() {
 
   const title = current.title || "Untitled";
   miniTitle.innerHTML = `<span class="mini-title-track"><span>${escapeHtml(title)}</span><span aria-hidden="true">${escapeHtml(title)}</span></span>`;
-  miniSub.textContent = activeScope === "local" ? "Remote" : current.channel;
+  miniSub.textContent = current.channel;
   miniArt.src = current.thumbnail || "";
   miniAction.textContent = isPaused() ? "▶" : "Ⅱ";
   requestAnimationFrame(() => {
@@ -771,9 +802,6 @@ function renderMiniPlayer() {
   });
 }
 
-// The stage shows the sharp art dissolving into a blurred fill of itself.
-// Cards carry mqdefault; probe maxres directly (the thumbnail proxy would
-// mask 404s with its SVG fallback) and upgrade when it exists.
 let stageArtToken = 0;
 let lastStageArt = "";
 function setStageArt(src) {
@@ -783,11 +811,13 @@ function setStageArt(src) {
   if (!src) {
     playerAmbient.style.backgroundImage = "";
     playerArt.removeAttribute("src");
+    setThemeColor(DEFAULT_THEME_COLOR);
     return;
   }
   const proxied = thumbnailSrc(src);
   playerAmbient.style.backgroundImage = `url(${JSON.stringify(proxied)})`;
   playerArt.src = proxied;
+  updateThemeColorFrom(proxied);
 
   const maxres = String(src).replace(/\/(?:default|mqdefault|hqdefault|sddefault)\.jpg(\?.*)?$/i, "/maxresdefault.jpg$1");
   if (maxres === src) return;
@@ -804,8 +834,8 @@ function setStageArt(src) {
 function renderPlayer() {
   const current = getCurrentNow();
   if (!current) {
-    playerTitle.textContent = activeScope === "local" ? "Mac unavailable" : "Nothing playing";
-    playerSub.textContent = scopeLabel();
+    playerTitle.textContent = "Nothing playing";
+    playerSub.textContent = "Recent";
     playerArt.classList.add("hidden");
     playerArtFallback.classList.remove("hidden");
     stageKicker.textContent = "";
@@ -817,20 +847,18 @@ function renderPlayer() {
   }
 
   playerTitle.textContent = current.title || "Untitled";
-  playerSub.textContent = current.channel || scopeLabel();
+  playerSub.textContent = current.channel || "Recent";
   playerArt.classList.toggle("hidden", !current.thumbnail);
   playerArtFallback.classList.toggle("hidden", Boolean(current.thumbnail));
   setStageArt(current.thumbnail || "");
 
-  if (activeScope === "local") {
-    stageKicker.textContent = "Playing on the Mac";
-  } else if (remoteQueue.length > 1 && remoteQueueIndex >= 0) {
+  if (remoteQueue.length > 1 && remoteQueueIndex >= 0) {
     stageKicker.textContent = `No. ${remoteQueueIndex + 1} of ${remoteQueue.length}`;
   } else {
     stageKicker.textContent = current.live ? "Live stream" : "";
   }
 
-  if (remoteQueue.length > 1 && activeScope !== "local") {
+  if (remoteQueue.length > 1) {
     stageQueueChip.textContent = `Queue · ${remoteQueue.length}`;
     stageQueueChip.classList.remove("hidden");
   } else {
@@ -842,13 +870,6 @@ function renderPlayer() {
 }
 
 function progressState() {
-  if (activeScope === "local") {
-    const status = localState.status || {};
-    return {
-      position: Number(status.position || 0),
-      duration: Number(status.duration || 0)
-    };
-  }
   return {
     position: Number(audio.currentTime || 0),
     duration: Number(audio.duration || 0)
@@ -864,17 +885,16 @@ function updateProgress() {
   elapsedTime.textContent = formatDuration(position).replace("--:--", "0:00");
   durationTime.textContent = hasDuration ? formatDuration(duration) : "--:--";
   miniPlayer.style.setProperty("--mini-progress", `${pct}%`);
+  updateMediaSessionPosition();
 }
 
 function seekRelative(seconds) {
-  if (activeScope === "local") return;
   if (!Number.isFinite(audio.duration)) return;
   audio.currentTime = Math.max(0, Math.min(audio.duration, audio.currentTime + seconds));
   updateProgress();
 }
 
 function isPaused() {
-  if (activeScope === "local") return Boolean(localState.status?.isPaused);
   return audio.paused;
 }
 
@@ -901,11 +921,6 @@ function stopRemote() {
 }
 
 async function toggleCurrentPause() {
-  if (activeScope === "local") {
-    await sendLocalCommand("pause_toggle");
-    await refreshLocalStatus();
-    return;
-  }
   if (audio.paused) audio.play().catch(() => setPlayerStatus("tap"));
   else audio.pause();
   renderMiniPlayer();
@@ -913,11 +928,6 @@ async function toggleCurrentPause() {
 }
 
 async function stopCurrent() {
-  if (activeScope === "local") {
-    await sendLocalCommand("stop");
-    await refreshLocalStatus();
-    return;
-  }
   stopRemote();
 }
 
@@ -940,6 +950,140 @@ function openCurrentSource() {
   if (current?.url) window.open(current.url, "_blank", "noopener");
 }
 
+// ---- Cast (Android AirPlay equivalent via the Remote Playback API) --------
+
+const remotePlayback = audio.remote && typeof audio.remote.watchAvailability === "function" ? audio.remote : null;
+if (remotePlayback) {
+  remotePlayback
+    .watchAvailability((available) => castBtn.classList.toggle("hidden", !available))
+    .catch(() => castBtn.classList.add("hidden"));
+}
+
+async function fetchCastSig() {
+  try {
+    const resp = await req("api/v1/pwa/cast-sig");
+    if (!resp.ok) return "";
+    const body = await resp.json();
+    return body?.castsig || "";
+  } catch {
+    return "";
+  }
+}
+
+async function castCurrent() {
+  if (!remotePlayback) return;
+  // Cast receivers fetch the stream URL themselves and can't send our cookie,
+  // so swap the source to a short-lived signed URL (keeping position) first.
+  if (activeSourceUrl) {
+    const sig = await fetchCastSig();
+    if (sig) {
+      const pos = audio.currentTime;
+      activeStreamUrl = proxiedStreamUrl(activeSourceUrl, sig);
+      audio.src = activeStreamUrl;
+      try {
+        audio.load();
+        await audio.play().catch(() => {});
+        if (Number.isFinite(pos) && pos > 0) audio.currentTime = pos;
+      } catch {}
+    }
+  }
+  try {
+    await remotePlayback.prompt();
+  } catch {}
+}
+
+// ---- Media Session (Android lock-screen / notification controls) ----------
+
+function updateMediaSessionMetadata() {
+  if (!("mediaSession" in navigator)) return;
+  const current = remoteNow;
+  if (!current) return;
+  try {
+    const art = current.thumbnail ? thumbnailSrc(current.thumbnail) : "";
+    const artwork = art
+      ? [
+          { src: art, sizes: "320x180", type: "image/jpeg" },
+          { src: art, sizes: "640x360", type: "image/jpeg" }
+        ]
+      : [];
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title: current.title || "bkgrnd",
+      artist: current.channel || "",
+      album: "bkgrnd",
+      artwork
+    });
+  } catch {}
+}
+
+function updateMediaSessionPosition() {
+  if (!("mediaSession" in navigator) || !("setPositionState" in navigator.mediaSession)) return;
+  const duration = Number(audio.duration);
+  if (!Number.isFinite(duration) || duration <= 0) return;
+  try {
+    navigator.mediaSession.setPositionState({
+      duration,
+      playbackRate: audio.playbackRate || 1,
+      position: Math.min(Math.max(audio.currentTime || 0, 0), duration)
+    });
+    navigator.mediaSession.playbackState = audio.paused ? "paused" : "playing";
+  } catch {}
+}
+
+if ("mediaSession" in navigator) {
+  const set = (action, handler) => {
+    try {
+      navigator.mediaSession.setActionHandler(action, handler);
+    } catch {}
+  };
+  set("play", () => audio.play().catch(() => {}));
+  set("pause", () => audio.pause());
+  set("nexttrack", () => advanceRemoteQueue(1));
+  set("previoustrack", () => advanceRemoteQueue(-1));
+  set("seekforward", (d) => seekRelative(d.seekOffset || 15));
+  set("seekbackward", (d) => seekRelative(-(d.seekOffset || 15)));
+  set("seekto", (d) => {
+    if (typeof d.seekTime === "number" && Number.isFinite(audio.duration)) {
+      audio.currentTime = Math.max(0, Math.min(audio.duration, d.seekTime));
+      updateProgress();
+    }
+  });
+}
+
+// ---- Dynamic Android status-bar tint from the artwork ---------------------
+
+const themeCanvas = document.createElement("canvas");
+function setThemeColor(color) {
+  if (themeColorMeta) themeColorMeta.setAttribute("content", color);
+}
+
+function updateThemeColorFrom(src) {
+  if (!src || !themeColorMeta) return;
+  const img = new Image();
+  img.crossOrigin = "anonymous";
+  img.onload = () => {
+    try {
+      themeCanvas.width = 8;
+      themeCanvas.height = 8;
+      const ctx = themeCanvas.getContext("2d", { willReadFrequently: true });
+      ctx.drawImage(img, 0, 0, 8, 8);
+      const { data } = ctx.getImageData(0, 0, 8, 8);
+      let r = 0, g = 0, b = 0, n = 0;
+      for (let i = 0; i < data.length; i += 4) {
+        r += data[i]; g += data[i + 1]; b += data[i + 2]; n++;
+      }
+      // Darken toward the app's chrome so the status bar stays legible.
+      const mix = (c) => Math.round((c / n) * 0.55);
+      setThemeColor(`rgb(${mix(r)}, ${mix(g)}, ${mix(b)})`);
+    } catch {
+      setThemeColor(DEFAULT_THEME_COLOR);
+    }
+  };
+  img.onerror = () => setThemeColor(DEFAULT_THEME_COLOR);
+  img.src = src;
+}
+
+// ---- Audio element events -------------------------------------------------
+
 audio.addEventListener("playing", () => {
   if (playStartTimeout) clearTimeout(playStartTimeout);
   playStartTimeout = null;
@@ -949,7 +1093,7 @@ audio.addEventListener("playing", () => {
   renderMiniPlayer();
   renderPlayer();
   updateMediaSessionMetadata();
-  // Warm the next queued track so auto-advance starts instantly.
+  updateMediaSessionPosition();
   if (remoteQueue.length && remoteQueueIndex >= 0 && remoteQueueIndex < remoteQueue.length - 1) {
     prewarmStream(remoteQueue[remoteQueueIndex + 1].url);
   }
@@ -973,6 +1117,7 @@ audio.addEventListener("loadedmetadata", updateProgress);
 audio.addEventListener("pause", () => {
   renderMiniPlayer();
   renderPlayer();
+  updateMediaSessionPosition();
 });
 audio.addEventListener("waiting", () => {
   if (!isActivelyPlaying() && !acquisitionTimer) setPlayerStatus("buffering");
@@ -982,16 +1127,31 @@ audio.addEventListener("stalled", () => {
   if (!isActivelyPlaying() && !recentlyProgressed && !acquisitionTimer) setPlayerStatus("reconnect");
 });
 audio.addEventListener("error", () => {
-  stopAcquisitionStatus();
   const code = audio.error?.code;
   const label = code === 2 ? "network" : code === 3 ? "decode" : code === 4 ? "unsupported" : "error";
-  setPlayerStatus(label);
+  // A real source that errored before playing = failed to start: pin it in Now
+  // Playing. (Guard on activeStreamUrl so clearing the src can't re-trigger.)
+  if (remoteNow && activeStreamUrl && !isActivelyPlaying()) {
+    markPlaybackFailed(label);
+  } else {
+    stopAcquisitionStatus();
+    setPlayerStatus(label);
+  }
 });
 
-remoteScopeBtn.addEventListener("click", () => setScope("remote"));
-localScopeBtn.addEventListener("click", () => setScope("local"));
+// ---- Wiring ---------------------------------------------------------------
+
+authSubmit.addEventListener("click", submitAuth);
+authToggle.addEventListener("click", () => setAuthMode(authMode === "login" ? "register" : "login"));
+authPass.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") submitAuth();
+});
+authUser.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") authPass.focus();
+});
+
 openSearchBtn.addEventListener("click", () => {
-  searchScope.textContent = scopeLabel();
+  searchScope.textContent = "Recent";
   setScreen("search");
   searchInput.focus();
 });
@@ -1021,12 +1181,13 @@ miniAction.addEventListener("click", (event) => {
 });
 closePlayerBtn.addEventListener("click", () => setScreen("home"));
 shareBtn.addEventListener("click", shareCurrent);
+castBtn.addEventListener("click", castCurrent);
 playerPauseBtn.addEventListener("click", toggleCurrentPause);
 playerStopBtn.addEventListener("click", stopCurrent);
 seekBackBtn.addEventListener("click", () => seekRelative(-15));
 seekForwardBtn.addEventListener("click", () => seekRelative(15));
 progressTrack.addEventListener("click", (event) => {
-  if (activeScope === "local" || !Number.isFinite(audio.duration) || audio.duration <= 0) return;
+  if (!Number.isFinite(audio.duration) || audio.duration <= 0) return;
   const rect = progressTrack.getBoundingClientRect();
   const pct = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
   audio.currentTime = audio.duration * pct;
@@ -1037,42 +1198,17 @@ playerArtFallback.addEventListener("click", openCurrentSource);
 
 settingsBtn.addEventListener("click", () => {
   baseUrlInput.value = getBaseUrl();
-  tokenInput.value = localStorage.getItem(LS_TOKEN) || "";
+  settingsUser.textContent = currentUser || "—";
   settings.showModal();
 });
 settings.addEventListener("close", () => {
   localStorage.setItem(LS_BASE, normalizeBaseUrl(baseUrlInput.value || ""));
-  localStorage.setItem(LS_TOKEN, (tokenInput.value || "").trim());
   loadLibrary();
-  refreshLocalStatus();
 });
-
-// Lock-screen / control-center metadata for the current remote track.
-function updateMediaSessionMetadata() {
-  if (!("mediaSession" in navigator)) return;
-  const current = remoteNow;
-  if (!current) return;
-  try {
-    const artwork = current.thumbnail
-      ? [{ src: thumbnailSrc(current.thumbnail), sizes: "320x180", type: "image/jpeg" }]
-      : [];
-    navigator.mediaSession.metadata = new MediaMetadata({
-      title: current.title || "bkgrnd",
-      artist: current.channel || "",
-      album: "bkgrnd",
-      artwork
-    });
-  } catch {}
-}
-
-if ("mediaSession" in navigator) {
-  try {
-    navigator.mediaSession.setActionHandler("play", () => audio.play().catch(() => {}));
-    navigator.mediaSession.setActionHandler("pause", () => audio.pause());
-    navigator.mediaSession.setActionHandler("nexttrack", () => advanceRemoteQueue(1));
-    navigator.mediaSession.setActionHandler("previoustrack", () => advanceRemoteQueue(-1));
-  } catch {}
-}
+logoutBtn.addEventListener("click", () => {
+  settings.close();
+  logout();
+});
 
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {
@@ -1094,15 +1230,21 @@ if ("serviceWorker" in navigator) {
   });
 }
 
-setScope("remote");
-loadLibrary();
-refreshLocalStatus();
-setInterval(refreshLocalStatus, 3000);
-// Keep the grid's recency order fresh (the Mac re-sorts on every play).
-setInterval(loadLibrary, 60000);
-document.addEventListener("visibilitychange", () => {
-  if (!document.hidden) {
-    loadLibrary();
-    refreshLocalStatus();
+// ---- Boot -----------------------------------------------------------------
+
+setAuthMode("login");
+(async function boot() {
+  const me = await fetchMe();
+  if (me?.username) {
+    await enterApp(me.username);
+  } else {
+    showAuth("");
   }
+})();
+
+setInterval(() => {
+  if (!authView.classList.contains("active")) loadLibrary();
+}, 60000);
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden && !authView.classList.contains("active")) loadLibrary();
 });

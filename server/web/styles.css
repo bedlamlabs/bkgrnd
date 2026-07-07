@@ -733,3 +733,30 @@ button { font: inherit; color: inherit; cursor: pointer; }
   color: var(--muted);
   font-weight: 650;
 }
+
+/* ── Auth (login / register) ── */
+.auth-screen { display: none; }
+.auth-screen.active { display: flex; }
+.auth-screen {
+  align-items: center;
+  justify-content: center;
+  min-height: calc(100dvh - 90px);
+}
+.auth-card {
+  width: 100%;
+  max-width: 340px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 4px 4px 40px;
+}
+.auth-brand { font-size: 30px; margin-bottom: 4px; }
+.auth-title {
+  font-family: "Fraunces", Georgia, serif;
+  font-weight: 500;
+  font-size: 24px;
+  margin: 0 0 6px;
+}
+.auth-card .input { height: 44px; }
+.auth-submit { width: 100%; margin-top: 6px; }
+.auth-toggle { width: 100%; }

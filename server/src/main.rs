@@ -1,3 +1,4 @@
+mod auth;
 mod spotify;
 
 use anyhow::Context;
@@ -50,6 +51,85 @@ struct AppState {
     local_commands: Arc<Mutex<VecDeque<(Instant, LocalPlaybackCommand)>>>,
     next_local_command_id: Arc<Mutex<u64>>,
     command_notify: Arc<Notify>,
+    // PWA auth: HMAC key for signed session cookies + the persistent user store.
+    session_secret: Arc<Vec<u8>>,
+    users: Arc<Mutex<Vec<auth::User>>>,
+    registration_open: bool,
+}
+
+/// Who is making a request. The bearer token (iOS app + Mac menubar) reads and
+/// writes the shared/global library; a signed-in PWA user gets their own.
+enum Principal {
+    Bearer,
+    User(String),
+}
+
+impl AppState {
+    /// Identify the caller, or None if unauthorized. Bearer token (header or
+    /// `?token=`) wins; otherwise a valid signed PWA session cookie.
+    fn principal(&self, headers: &HeaderMap, token_qs: Option<&str>) -> Option<Principal> {
+        if auth_ok(headers, &self.bearer_token, token_qs) {
+            return Some(Principal::Bearer);
+        }
+        let cookie = headers.get(header::COOKIE).and_then(|v| v.to_str().ok())?;
+        let tok = auth::session_from_cookie_header(cookie)?;
+        auth::verify_session(&self.session_secret, &tok).map(Principal::User)
+    }
+
+    /// True if a request may access the API (the common case that doesn't care
+    /// who the caller is). Cast stream signatures are checked separately.
+    fn authorized(&self, headers: &HeaderMap, token_qs: Option<&str>) -> bool {
+        self.principal(headers, token_qs).is_some()
+    }
+
+    /// Path to the caller's playlists file. A user's file is seeded from the
+    /// current global library on first access, then diverges independently.
+    async fn playlists_path_for(&self, principal: &Principal) -> PathBuf {
+        match principal {
+            Principal::Bearer => playlists_path(&self.data_dir),
+            Principal::User(user) => {
+                let path = self.data_dir.join("users").join(user).join("playlists.yaml");
+                self.seed_if_absent(&path, &playlists_path(&self.data_dir), None)
+                    .await;
+                path
+            }
+        }
+    }
+
+    /// Path to the caller's history file (seeded like playlists, default `[]`).
+    async fn history_path_for(&self, principal: &Principal) -> PathBuf {
+        match principal {
+            Principal::Bearer => history_path(&self.data_dir),
+            Principal::User(user) => {
+                let path = self.data_dir.join("users").join(user).join("history.json");
+                self.seed_if_absent(&path, &history_path(&self.data_dir), Some(b"[]"))
+                    .await;
+                path
+            }
+        }
+    }
+
+    /// Copy `global` into `path` on first access; if the global file is missing,
+    /// write `fallback` (so a new user starts from the current shared library,
+    /// or an empty default).
+    async fn seed_if_absent(&self, path: &std::path::Path, global: &std::path::Path, fallback: Option<&[u8]>) {
+        if tokio::fs::metadata(path).await.is_ok() {
+            return;
+        }
+        if let Some(parent) = path.parent() {
+            let _ = tokio::fs::create_dir_all(parent).await;
+        }
+        match tokio::fs::read(global).await {
+            Ok(bytes) => {
+                let _ = write_atomic(path, &bytes).await;
+            }
+            Err(_) => {
+                if let Some(fallback) = fallback {
+                    let _ = write_atomic(path, fallback).await;
+                }
+            }
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -241,6 +321,128 @@ fn auth_ok(headers: &HeaderMap, token: &Option<String>, token_qs: Option<&str>) 
     s == format!("Bearer {}", expected)
 }
 
+fn now_unix_string() -> String {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+        .to_string()
+}
+
+#[derive(Debug, Deserialize)]
+struct CredsRequest {
+    username: String,
+    password: String,
+}
+
+#[derive(Debug, Serialize)]
+struct MeResponse {
+    username: String,
+}
+
+#[derive(Debug, Serialize)]
+struct CastSigResponse {
+    castsig: String,
+}
+
+fn cookie_response(status: StatusCode, set_cookie: String) -> Response<Body> {
+    let mut resp = status.into_response();
+    if let Ok(val) = HeaderValue::from_str(&set_cookie) {
+        resp.headers_mut().append(header::SET_COOKIE, val);
+    }
+    resp
+}
+
+/// Create a user (open unless WOPR_REGISTRATION_OPEN=0) and log them in.
+async fn pwa_register(State(state): State<AppState>, Json(req): Json<CredsRequest>) -> Response<Body> {
+    if !state.registration_open {
+        return (StatusCode::FORBIDDEN, "Registration is closed").into_response();
+    }
+    let Some(username) = auth::normalize_username(&req.username) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "Invalid username (1-32 chars: a-z 0-9 _ . -)",
+        )
+            .into_response();
+    };
+    if req.password.len() < 6 {
+        return (StatusCode::BAD_REQUEST, "Password must be at least 6 characters").into_response();
+    }
+
+    let mut users = state.users.lock().await;
+    if users.iter().any(|u| u.username == username) {
+        return (StatusCode::CONFLICT, "Username already taken").into_response();
+    }
+    let password_hash = match auth::hash_password(&req.password) {
+        Ok(h) => h,
+        Err(e) => {
+            error!("password hash failed: {e}");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+    users.push(auth::User {
+        username: username.clone(),
+        password_hash,
+        created_at: now_unix_string(),
+    });
+    if let Err(e) = auth::save_users(&state.data_dir, &users) {
+        error!("failed to persist users.json: {e}");
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    }
+    drop(users);
+
+    let token = auth::mint_session(&state.session_secret, &username, auth::SESSION_TTL_SECS);
+    cookie_response(StatusCode::OK, auth::session_set_cookie(&token))
+}
+
+async fn pwa_login(State(state): State<AppState>, Json(req): Json<CredsRequest>) -> Response<Body> {
+    let Some(username) = auth::normalize_username(&req.username) else {
+        return (StatusCode::UNAUTHORIZED, "Invalid username or password").into_response();
+    };
+    let users = state.users.lock().await;
+    let ok = users
+        .iter()
+        .find(|u| u.username == username)
+        .map(|u| auth::verify_password(&req.password, &u.password_hash))
+        .unwrap_or(false);
+    drop(users);
+    if !ok {
+        return (StatusCode::UNAUTHORIZED, "Invalid username or password").into_response();
+    }
+    let token = auth::mint_session(&state.session_secret, &username, auth::SESSION_TTL_SECS);
+    cookie_response(StatusCode::OK, auth::session_set_cookie(&token))
+}
+
+async fn pwa_logout() -> Response<Body> {
+    cookie_response(StatusCode::NO_CONTENT, auth::session_clear_cookie())
+}
+
+/// Cheap "am I logged in?" check for the PWA on load.
+async fn pwa_me(State(state): State<AppState>, headers: HeaderMap) -> Response<Body> {
+    if let Some(cookie) = headers.get(header::COOKIE).and_then(|v| v.to_str().ok()) {
+        if let Some(tok) = auth::session_from_cookie_header(cookie) {
+            if let Some(username) = auth::verify_session(&state.session_secret, &tok) {
+                return Json(MeResponse { username }).into_response();
+            }
+        }
+    }
+    StatusCode::UNAUTHORIZED.into_response()
+}
+
+/// Hand an authenticated browser a short-lived signature it can put in a Cast
+/// stream URL (Chromecast fetches the URL itself and can't send the cookie).
+async fn pwa_cast_sig(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<TokenQuery>,
+) -> Response<Body> {
+    if !state.authorized(&headers, q.token.as_deref()) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let castsig = auth::mint_cast_sig(&state.session_secret, auth::CAST_TTL_SECS);
+    Json(CastSigResponse { castsig }).into_response()
+}
+
 fn ytdlp_command() -> tokio::process::Command {
     let bin = std::env::var("WOPR_YTDLP_BIN")
         .ok()
@@ -263,12 +465,12 @@ async fn get_playlists(
     headers: HeaderMap,
     Query(q): Query<TokenQuery>,
 ) -> impl IntoResponse {
-    if !auth_ok(&headers, &state.bearer_token, q.token.as_deref()) {
+    let Some(principal) = state.principal(&headers, q.token.as_deref()) else {
         return StatusCode::UNAUTHORIZED.into_response();
-    }
+    };
 
     let _guard = state.playlists_lock.lock().await;
-    let path = playlists_path(&state.data_dir);
+    let path = state.playlists_path_for(&principal).await;
     let raw = match tokio::fs::read_to_string(&path).await {
         Ok(v) => v,
         Err(_) => {
@@ -295,12 +497,12 @@ async fn get_playlists_json(
     headers: HeaderMap,
     Query(q): Query<TokenQuery>,
 ) -> impl IntoResponse {
-    if !auth_ok(&headers, &state.bearer_token, q.token.as_deref()) {
+    let Some(principal) = state.principal(&headers, q.token.as_deref()) else {
         return StatusCode::UNAUTHORIZED.into_response();
-    }
+    };
 
     let _guard = state.playlists_lock.lock().await;
-    let path = playlists_path(&state.data_dir);
+    let path = state.playlists_path_for(&principal).await;
     let doc: PlaylistDoc = match tokio::fs::read_to_string(&path).await {
         Ok(raw) => serde_yaml::from_str(&raw).unwrap_or(PlaylistDoc {
             version: 1,
@@ -333,9 +535,9 @@ async fn put_playlists(
     Query(q): Query<TokenQuery>,
     body: Bytes,
 ) -> impl IntoResponse {
-    if !auth_ok(&headers, &state.bearer_token, q.token.as_deref()) {
+    let Some(principal) = state.principal(&headers, q.token.as_deref()) else {
         return StatusCode::UNAUTHORIZED.into_response();
-    }
+    };
 
     // Validate YAML
     let raw = match std::str::from_utf8(&body) {
@@ -347,10 +549,12 @@ async fn put_playlists(
     }
 
     let _guard = state.playlists_lock.lock().await;
-    let path = playlists_path(&state.data_dir);
-    if let Err(e) = tokio::fs::create_dir_all(&state.data_dir).await {
-        error!("failed to create data dir: {e}");
-        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    let path = state.playlists_path_for(&principal).await;
+    if let Some(parent) = path.parent() {
+        if let Err(e) = tokio::fs::create_dir_all(parent).await {
+            error!("failed to create data dir: {e}");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
     }
     if let Err(e) = write_atomic(&path, raw.as_bytes()).await {
         error!("failed to write playlists: {e}");
@@ -365,9 +569,9 @@ async fn put_playlists_json(
     Query(q): Query<TokenQuery>,
     body: Bytes,
 ) -> impl IntoResponse {
-    if !auth_ok(&headers, &state.bearer_token, q.token.as_deref()) {
+    let Some(principal) = state.principal(&headers, q.token.as_deref()) else {
         return StatusCode::UNAUTHORIZED.into_response();
-    }
+    };
     let doc: PlaylistDoc = match serde_json::from_slice(&body) {
         Ok(d) => d,
         Err(_) => return (StatusCode::BAD_REQUEST, "Invalid playlist JSON").into_response(),
@@ -375,10 +579,12 @@ async fn put_playlists_json(
     let raw = serde_yaml::to_string(&doc).unwrap_or_default();
 
     let _guard = state.playlists_lock.lock().await;
-    let path = playlists_path(&state.data_dir);
-    if let Err(e) = tokio::fs::create_dir_all(&state.data_dir).await {
-        error!("failed to create data dir: {e}");
-        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    let path = state.playlists_path_for(&principal).await;
+    if let Some(parent) = path.parent() {
+        if let Err(e) = tokio::fs::create_dir_all(parent).await {
+            error!("failed to create data dir: {e}");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
     }
     if let Err(e) = write_atomic(&path, raw.as_bytes()).await {
         error!("failed to write playlists: {e}");
@@ -392,11 +598,11 @@ async fn get_history_json(
     headers: HeaderMap,
     Query(q): Query<TokenQuery>,
 ) -> impl IntoResponse {
-    if !auth_ok(&headers, &state.bearer_token, q.token.as_deref()) {
+    let Some(principal) = state.principal(&headers, q.token.as_deref()) else {
         return StatusCode::UNAUTHORIZED.into_response();
-    }
+    };
 
-    let path = history_path(&state.data_dir);
+    let path = state.history_path_for(&principal).await;
     let raw = match tokio::fs::read_to_string(&path).await {
         Ok(v) => v,
         Err(_) => "[]".to_string(),
@@ -416,9 +622,9 @@ async fn put_history_json(
     Query(q): Query<TokenQuery>,
     body: Bytes,
 ) -> impl IntoResponse {
-    if !auth_ok(&headers, &state.bearer_token, q.token.as_deref()) {
+    let Some(principal) = state.principal(&headers, q.token.as_deref()) else {
         return StatusCode::UNAUTHORIZED.into_response();
-    }
+    };
 
     // Validate JSON array (history entries are client-defined; keep it permissive).
     if serde_json::from_slice::<serde_json::Value>(&body)
@@ -429,12 +635,13 @@ async fn put_history_json(
         return (StatusCode::BAD_REQUEST, "Invalid history JSON").into_response();
     }
 
-    if let Err(e) = tokio::fs::create_dir_all(&state.data_dir).await {
-        error!("failed to create data dir: {e}");
-        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    let path = state.history_path_for(&principal).await;
+    if let Some(parent) = path.parent() {
+        if let Err(e) = tokio::fs::create_dir_all(parent).await {
+            error!("failed to create data dir: {e}");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
     }
-
-    let path = history_path(&state.data_dir);
     if let Err(e) = write_atomic(&path, &body).await {
         error!("failed to write history: {e}");
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
@@ -449,7 +656,7 @@ async fn put_local_status(
     Query(q): Query<TokenQuery>,
     Json(status): Json<LocalPlayerStatus>,
 ) -> impl IntoResponse {
-    if !auth_ok(&headers, &state.bearer_token, q.token.as_deref()) {
+    if !state.authorized(&headers, q.token.as_deref()) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
 
@@ -466,7 +673,7 @@ async fn get_local_status(
     headers: HeaderMap,
     Query(q): Query<TokenQuery>,
 ) -> impl IntoResponse {
-    if !auth_ok(&headers, &state.bearer_token, q.token.as_deref()) {
+    if !state.authorized(&headers, q.token.as_deref()) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
 
@@ -495,7 +702,7 @@ async fn post_local_command(
     Query(q): Query<TokenQuery>,
     Json(req): Json<LocalCommandRequest>,
 ) -> impl IntoResponse {
-    if !auth_ok(&headers, &state.bearer_token, q.token.as_deref()) {
+    if !state.authorized(&headers, q.token.as_deref()) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
 
@@ -535,7 +742,7 @@ async fn get_next_local_command(
     headers: HeaderMap,
     Query(q): Query<TokenQuery>,
 ) -> impl IntoResponse {
-    if !auth_ok(&headers, &state.bearer_token, q.token.as_deref()) {
+    if !state.authorized(&headers, q.token.as_deref()) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
 
@@ -576,6 +783,9 @@ struct StreamQuery {
     url: String,
     token: Option<String>,
     proxy: Option<bool>,
+    // Short-lived signature so Cast/Chromecast devices (which can't send the
+    // session cookie) can fetch the proxied stream.
+    castsig: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -610,7 +820,7 @@ async fn resolve_stream(
     headers: HeaderMap,
     Query(q): Query<ResolveQuery>,
 ) -> impl IntoResponse {
-    if !auth_ok(&headers, &state.bearer_token, q.token.as_deref()) {
+    if !state.authorized(&headers, q.token.as_deref()) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
 
@@ -634,7 +844,7 @@ async fn prewarm_stream(
     headers: HeaderMap,
     Query(q): Query<ResolveQuery>,
 ) -> impl IntoResponse {
-    if !auth_ok(&headers, &state.bearer_token, q.token.as_deref()) {
+    if !state.authorized(&headers, q.token.as_deref()) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
 
@@ -665,7 +875,7 @@ async fn thumbnail_image(
     headers: HeaderMap,
     Query(q): Query<ThumbnailQuery>,
 ) -> impl IntoResponse {
-    if !auth_ok(&headers, &state.bearer_token, q.token.as_deref()) {
+    if !state.authorized(&headers, q.token.as_deref()) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
 
@@ -739,7 +949,12 @@ async fn stream_audio(
     headers: HeaderMap,
     Query(q): Query<StreamQuery>,
 ) -> impl IntoResponse {
-    if !auth_ok(&headers, &state.bearer_token, q.token.as_deref()) {
+    let cast_ok = q
+        .castsig
+        .as_deref()
+        .map(|sig| auth::verify_cast_sig(&state.session_secret, sig))
+        .unwrap_or(false);
+    if !cast_ok && !state.authorized(&headers, q.token.as_deref()) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
 
@@ -1467,7 +1682,7 @@ async fn run_ytsearch(state: &AppState, search_arg: &str, limit: usize) -> Resul
 }
 
 async fn search(State(state): State<AppState>, headers: HeaderMap, Query(q): Query<SearchQuery>) -> impl IntoResponse {
-    if !auth_ok(&headers, &state.bearer_token, q.token.as_deref()) {
+    if !state.authorized(&headers, q.token.as_deref()) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
     let query = q.q.trim().to_lowercase();
@@ -1547,7 +1762,7 @@ async fn spotify_queue(
     headers: HeaderMap,
     Query(q): Query<SpotifyQueueQuery>,
 ) -> impl IntoResponse {
-    if !auth_ok(&headers, &state.bearer_token, q.token.as_deref()) {
+    if !state.authorized(&headers, q.token.as_deref()) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
     if !spotify::is_spotify_url(&q.url) {
@@ -1656,6 +1871,24 @@ async fn main() -> anyhow::Result<()> {
         );
     }
 
+    // PWA session-cookie signing key. Falls back to the bearer token so a
+    // dedicated secret is optional; either way it's stable across restarts.
+    let session_secret: Vec<u8> = std::env::var("WOPR_SESSION_SECRET")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .map(|s| s.into_bytes())
+        .or_else(|| bearer_token.clone().map(|t| t.into_bytes()))
+        .unwrap_or_else(|| b"bkgrnd-insecure-dev-session-secret".to_vec());
+    let registration_open = std::env::var("WOPR_REGISTRATION_OPEN")
+        .map(|v| !(v == "0" || v.eq_ignore_ascii_case("false")))
+        .unwrap_or(true);
+    let users = auth::load_users(&data_dir);
+    info!(
+        "pwa auth: {} user(s) loaded, registration {}",
+        users.len(),
+        if registration_open { "OPEN" } else { "closed" }
+    );
+
     let http = reqwest::Client::builder()
         .connect_timeout(std::time::Duration::from_secs(10))
         .build()
@@ -1675,6 +1908,9 @@ async fn main() -> anyhow::Result<()> {
         local_commands: Arc::new(Mutex::new(VecDeque::new())),
         next_local_command_id: Arc::new(Mutex::new(1)),
         command_notify: Arc::new(Notify::new()),
+        session_secret: Arc::new(session_secret),
+        users: Arc::new(Mutex::new(users)),
+        registration_open,
     };
 
     let web_dir = find_web_dir();
@@ -1682,6 +1918,11 @@ async fn main() -> anyhow::Result<()> {
 
     let app = Router::new()
         .route("/api/v1/health", get(health))
+        .route("/api/v1/pwa/register", post(pwa_register))
+        .route("/api/v1/pwa/login", post(pwa_login))
+        .route("/api/v1/pwa/logout", post(pwa_logout))
+        .route("/api/v1/pwa/me", get(pwa_me))
+        .route("/api/v1/pwa/cast-sig", get(pwa_cast_sig))
         .route("/api/v1/playlists", get(get_playlists).put(put_playlists))
         .route("/api/v1/playlists.json", get(get_playlists_json).put(put_playlists_json))
         .route("/api/v1/history.json", get(get_history_json).put(put_history_json))

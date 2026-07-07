@@ -8,13 +8,13 @@
     <meta name="theme-color" content="#0d0e11" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-    <link rel="apple-touch-icon" sizes="180x180" href="assets/apple-touch-icon.png?v=27" />
+    <link rel="apple-touch-icon" sizes="180x180" href="assets/apple-touch-icon.png?v=29" />
 
-    <link rel="manifest" href="manifest.webmanifest?v=27" />
+    <link rel="manifest" href="manifest.webmanifest?v=29" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..900;1,9..144,300..900&display=swap" rel="stylesheet" />
-    <link rel="stylesheet" href="styles.css?v=27" />
+    <link rel="stylesheet" href="styles.css?v=29" />
   </head>
   <body>
     <header class="topbar">
@@ -28,21 +28,24 @@
       </div>
     </header>
 
-    <main id="homeView" class="screen active">
-      <section class="segment" aria-label="Playback scope">
-        <button id="remoteScopeBtn" class="seg-btn active" type="button">Recent</button>
-        <button id="localScopeBtn" class="seg-btn" type="button">
-          Remote
-          <span id="localActiveDot" class="scope-dot hidden" aria-hidden="true"></span>
-        </button>
-      </section>
+    <main id="authView" class="screen auth-screen">
+      <div class="auth-card">
+        <div class="brand auth-brand"><i>b</i>kgrnd</div>
+        <h1 id="authTitle" class="auth-title">Sign in</h1>
+        <input id="authUser" class="input" type="text" placeholder="Username" autocomplete="username" autocapitalize="none" spellcheck="false" />
+        <input id="authPass" class="input" type="password" placeholder="Password" autocomplete="current-password" />
+        <div id="authMsg" class="inline-msg hidden"></div>
+        <button id="authSubmit" class="primary-btn auth-submit" type="button">Sign in</button>
+        <button id="authToggle" class="ghost-btn auth-toggle" type="button">Create an account</button>
+      </div>
+    </main>
 
+    <main id="homeView" class="screen active">
       <button id="openSearchBtn" class="searchrow" type="button">
         <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="7" cy="7" r="4.4" stroke="currentColor" stroke-width="1.4"/><path d="m10.4 10.4 3 3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
         Search, or paste a YouTube / Spotify URL
       </button>
 
-      <section id="scopeStatus" class="scope-status hidden"></section>
       <div class="section-label"><h2>Streams</h2></div>
       <section id="mixGrid" class="mix-grid" aria-live="polite"></section>
     </main>
@@ -83,6 +86,9 @@
           <span class="chip"><span class="chip-dot" aria-hidden="true"></span><span id="playerStatusTag">streaming</span></span>
           <div class="stage-actions">
             <span id="stageQueueChip" class="chip hidden"></span>
+            <button id="castBtn" class="ghost-icon hidden" type="button" aria-label="Cast to a device">
+              <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M2 12.4a1.6 1.6 0 0 1 1.6 1.6M2 9.8a4.2 4.2 0 0 1 4.2 4.2M2 7.2A6.8 6.8 0 0 1 8.8 14" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><path d="M2 4.2V3.4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v9.2a1 1 0 0 1-1 1h-2.4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
             <button id="shareBtn" class="ghost-icon" type="button" aria-label="Share">
               <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 10V2.6M8 2.6 5.4 5.2M8 2.6l2.6 2.6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M3.4 8.6v3.6a1.2 1.2 0 0 0 1.2 1.2h6.8a1.2 1.2 0 0 0 1.2-1.2V8.6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
             </button>
@@ -135,19 +141,18 @@
     <dialog id="settings" class="dialog">
       <form method="dialog" class="dialog-inner">
         <div class="dialog-h">Settings</div>
-        <p class="hint">Leave Base URL blank when this app is served by bkgrnd.bedl.am. Token is optional unless auth is enabled.</p>
+        <p class="hint">Signed in as <b id="settingsUser">—</b>. Leave Base URL blank when this app is served by bkgrnd.bedl.am.</p>
         <label class="label" for="baseUrl">Base URL</label>
         <input id="baseUrl" class="input" type="text" placeholder="(same origin)" />
-        <label class="label" for="token">Token</label>
-        <input id="token" class="input" type="password" placeholder="WOPR token" autocomplete="off" />
         <div class="dialog-actions">
           <button class="primary-btn" value="default" type="submit">Save</button>
+          <button id="logoutBtn" class="ghost-btn" value="cancel" type="button">Log out</button>
           <button class="ghost-btn" value="cancel" type="submit">Close</button>
         </div>
       </form>
     </dialog>
 
     <audio id="player" preload="none" playsinline></audio>
-    <script src="app.js?v=27"></script>
+    <script src="app.js?v=29"></script>
   </body>
 </html>
