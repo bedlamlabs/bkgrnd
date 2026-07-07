@@ -760,3 +760,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .auth-card .input { height: 44px; }
 .auth-submit { width: 100%; margin-top: 6px; }
 .auth-toggle { width: 100%; }
+
+/* ── Bookmark saved state ── */
+.s-btn.bookmark.saved { color: var(--coral); }
+.s-btn.bookmark.saved svg path { fill: currentColor; }

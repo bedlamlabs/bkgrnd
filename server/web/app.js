@@ -34,6 +34,7 @@ const searchResults = el("searchResults");
 const closePlayerBtn = el("closePlayerBtn");
 const shareBtn = el("shareBtn");
 const castBtn = el("castBtn");
+const bookmarkBtn = el("bookmarkBtn");
 const playerArt = el("playerArt");
 const playerArtFallback = el("playerArtFallback");
 const playerAmbient = el("playerAmbient");
@@ -68,6 +69,7 @@ const themeColorMeta = document.querySelector('meta[name="theme-color"]');
 const audio = el("player");
 
 let libraryItems = [];
+let libraryDoc = null;
 let recentItems = [];
 let searchItems = [];
 let remoteNow = null;
@@ -384,6 +386,11 @@ async function loadLibrary() {
     fetchJson("api/v1/history.json", [])
   ]);
 
+  // Keep the raw doc so the bookmark control can add/remove and PUT it back.
+  libraryDoc = playlistDoc && Array.isArray(playlistDoc.playlists)
+    ? playlistDoc
+    : { version: 1, updatedAt: "", playlists: [] };
+
   const playlistItems = [];
   const playlists = Array.isArray(playlistDoc?.playlists) ? playlistDoc.playlists : [];
   for (const playlist of playlists) {
@@ -402,6 +409,7 @@ async function loadLibrary() {
   });
 
   renderGrid();
+  updateBookmarkState();
 }
 
 function renderGrid() {
@@ -524,9 +532,10 @@ async function search(query) {
 }
 
 async function playItem(item) {
-  const ok = await playRemote(item);
-  // On failure the item is pinned to the Now Playing stage; don't override it.
-  if (ok !== false) setScreen("home");
+  // Starting a stream enters playback mode immediately (shows resolving state,
+  // and on failure the item stays pinned here).
+  setScreen("player");
+  await playRemote(item);
 }
 
 function isSpotifyUrl(url) {
@@ -833,6 +842,7 @@ function setStageArt(src) {
 
 function renderPlayer() {
   const current = getCurrentNow();
+  updateBookmarkState();
   if (!current) {
     playerTitle.textContent = "Nothing playing";
     playerSub.textContent = "Recent";
@@ -929,6 +939,66 @@ async function toggleCurrentPause() {
 
 async function stopCurrent() {
   stopRemote();
+}
+
+// ---- Bookmark: save/remove the current track from the user's library ------
+
+function isSaved(url) {
+  if (!url || !libraryDoc) return false;
+  return (libraryDoc.playlists || []).some(
+    (p) => Array.isArray(p.items) && p.items.some((it) => it.url === url)
+  );
+}
+
+function updateBookmarkState() {
+  const current = getCurrentNow();
+  const saved = current ? isSaved(current.url) : false;
+  bookmarkBtn.classList.toggle("saved", saved);
+  bookmarkBtn.setAttribute("aria-pressed", saved ? "true" : "false");
+  bookmarkBtn.setAttribute("aria-label", saved ? "Remove from library" : "Save to library");
+}
+
+async function toggleBookmark() {
+  const current = getCurrentNow();
+  if (!current?.url) return;
+  if (!libraryDoc || !Array.isArray(libraryDoc.playlists)) {
+    libraryDoc = { version: 1, updatedAt: "", playlists: [] };
+  }
+  const url = current.url;
+
+  if (isSaved(url)) {
+    for (const p of libraryDoc.playlists) {
+      if (Array.isArray(p.items)) p.items = p.items.filter((it) => it.url !== url);
+    }
+  } else {
+    let target =
+      libraryDoc.playlists.find((p) => ["streams", "recent", "recent-mixes"].includes(p.id)) ||
+      libraryDoc.playlists[0];
+    if (!target) {
+      target = { id: "streams", name: "Streams", items: [] };
+      libraryDoc.playlists.push(target);
+    }
+    if (!Array.isArray(target.items)) target.items = [];
+    target.items.unshift({
+      url,
+      title: current.title || url,
+      channel: current.channel || "",
+      thumbnail: current.thumbnail || "",
+      addedAt: new Date().toISOString()
+    });
+  }
+  libraryDoc.updatedAt = new Date().toISOString();
+  updateBookmarkState();
+
+  try {
+    const resp = await req("api/v1/playlists.json", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(libraryDoc)
+    });
+    if (resp.status === 401) onUnauthorized();
+  } catch {}
+  loadLibrary();
 }
 
 async function shareCurrent() {
@@ -1182,6 +1252,7 @@ miniAction.addEventListener("click", (event) => {
 closePlayerBtn.addEventListener("click", () => setScreen("home"));
 shareBtn.addEventListener("click", shareCurrent);
 castBtn.addEventListener("click", castCurrent);
+bookmarkBtn.addEventListener("click", toggleBookmark);
 playerPauseBtn.addEventListener("click", toggleCurrentPause);
 playerStopBtn.addEventListener("click", stopCurrent);
 seekBackBtn.addEventListener("click", () => seekRelative(-15));
