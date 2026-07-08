@@ -29,6 +29,7 @@ class Relay {
   static const base = 'https://bkgrnd.bedl.am';
   static final AudioPlayer player = AudioPlayer();
   static String? _token;
+  static Map<String, dynamic>? _libraryDoc; // raw doc, for bookmark add/remove
 
   static Future<void> load() async {
     _token = (await SharedPreferences.getInstance()).getString('session_token');
@@ -63,6 +64,7 @@ class Relay {
     final resp = await http.get(Uri.parse('$base/api/v1/playlists.json'), headers: _auth);
     if (resp.statusCode != 200) return [];
     final doc = jsonDecode(resp.body) as Map<String, dynamic>;
+    _libraryDoc = doc;
     final out = <Track>[];
     final seen = <String>{};
     for (final pl in (doc['playlists'] as List? ?? [])) {
@@ -141,6 +143,53 @@ class Relay {
       ),
     ));
     Relay.player.play();
+  }
+
+  static bool isSaved(String url) {
+    final key = _videoKey(url);
+    for (final pl in (_libraryDoc?['playlists'] as List? ?? [])) {
+      for (final it in (pl['items'] as List? ?? [])) {
+        if (_videoKey((it['url'] as String?) ?? '') == key) return true;
+      }
+    }
+    return false;
+  }
+
+  static Future<void> toggleBookmark(Track t) async {
+    _libraryDoc ??= {'version': 1, 'updatedAt': '', 'playlists': <dynamic>[]};
+    final playlists = (_libraryDoc!['playlists'] as List);
+    final key = _videoKey(t.url);
+    if (isSaved(t.url)) {
+      for (final pl in playlists) {
+        (pl['items'] as List).removeWhere((it) => _videoKey((it['url'] as String?) ?? '') == key);
+      }
+    } else {
+      final existing = playlists
+          .cast<Map<String, dynamic>>()
+          .where((p) => ['streams', 'recent', 'recent-mixes'].contains(p['id']));
+      Map<String, dynamic> target;
+      if (existing.isNotEmpty) {
+        target = existing.first;
+      } else if (playlists.isNotEmpty) {
+        target = playlists.first as Map<String, dynamic>;
+      } else {
+        target = {'id': 'streams', 'name': 'Streams', 'items': <dynamic>[]};
+        playlists.add(target);
+      }
+      (target['items'] as List).insert(0, {
+        'url': t.url,
+        'title': t.title,
+        'channel': t.channel,
+        'thumbnail': t.thumbnail,
+        'addedAt': DateTime.now().toUtc().toIso8601String(),
+      });
+    }
+    _libraryDoc!['updatedAt'] = DateTime.now().toUtc().toIso8601String();
+    await http.put(
+      Uri.parse('$base/api/v1/playlists.json'),
+      headers: {..._auth, 'content-type': 'application/json'},
+      body: jsonEncode(_libraryDoc),
+    );
   }
 }
 
@@ -357,6 +406,8 @@ class _MiniPlayer extends StatelessWidget {
           return Material(
             color: Theme.of(context).colorScheme.surfaceContainerHighest,
             child: ListTile(
+              onTap: () => Navigator.of(context)
+                  .push(MaterialPageRoute(builder: (_) => const PlayerPage())),
               title: Text(tag.title, maxLines: 1, overflow: TextOverflow.ellipsis),
               subtitle: tag.artist == null ? null : Text(tag.artist!, maxLines: 1),
               trailing: StreamBuilder<PlayerState>(
@@ -372,5 +423,123 @@ class _MiniPlayer extends StatelessWidget {
             ),
           );
         },
+      );
+}
+
+String _fmt(Duration d) {
+  final m = d.inMinutes;
+  final s = (d.inSeconds % 60).toString().padLeft(2, '0');
+  return '$m:$s';
+}
+
+/// Full-screen now-playing: artwork, seek bar, transport, bookmark.
+class PlayerPage extends StatefulWidget {
+  const PlayerPage({super.key});
+  @override
+  State<PlayerPage> createState() => _PlayerPageState();
+}
+
+class _PlayerPageState extends State<PlayerPage> {
+  @override
+  Widget build(BuildContext context) => Scaffold(
+        appBar: AppBar(),
+        body: StreamBuilder<SequenceState?>(
+          stream: Relay.player.sequenceStateStream,
+          builder: (context, snap) {
+            final tag = snap.data?.currentSource?.tag as MediaItem?;
+            if (tag == null) return const Center(child: Text('Nothing playing'));
+            final saved = Relay.isSaved(tag.id);
+            return Column(
+              children: [
+                Expanded(
+                  child: Center(
+                    child: tag.artUri != null
+                        ? CachedNetworkImage(imageUrl: tag.artUri.toString(), fit: BoxFit.contain)
+                        : const Icon(Icons.music_note, size: 120),
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.all(20),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(tag.title, style: Theme.of(context).textTheme.titleLarge, maxLines: 2, overflow: TextOverflow.ellipsis),
+                      if (tag.artist != null && tag.artist!.isNotEmpty)
+                        Text(tag.artist!, style: Theme.of(context).textTheme.bodyMedium),
+                      const SizedBox(height: 8),
+                      StreamBuilder<Duration>(
+                        stream: Relay.player.positionStream,
+                        builder: (context, posSnap) {
+                          final pos = posSnap.data ?? Duration.zero;
+                          final dur = Relay.player.duration ?? Duration.zero;
+                          final maxMs = dur.inMilliseconds <= 0 ? 1.0 : dur.inMilliseconds.toDouble();
+                          return Column(
+                            children: [
+                              Slider(
+                                value: pos.inMilliseconds.clamp(0, maxMs.toInt()).toDouble(),
+                                max: maxMs,
+                                onChanged: (v) => Relay.player.seek(Duration(milliseconds: v.toInt())),
+                              ),
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                children: [Text(_fmt(pos)), Text(_fmt(dur))],
+                              ),
+                            ],
+                          );
+                        },
+                      ),
+                      const SizedBox(height: 8),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceAround,
+                        children: [
+                          IconButton(
+                            icon: Icon(saved ? Icons.bookmark : Icons.bookmark_border),
+                            onPressed: () async {
+                              await Relay.toggleBookmark(Track(
+                                url: tag.id,
+                                title: tag.title,
+                                channel: tag.artist ?? '',
+                                thumbnail: tag.artUri?.toString() ?? '',
+                              ));
+                              if (mounted) setState(() {});
+                            },
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.replay_10),
+                            onPressed: () => Relay.player.seek(
+                                Relay.player.position - const Duration(seconds: 15)),
+                          ),
+                          StreamBuilder<PlayerState>(
+                            stream: Relay.player.playerStateStream,
+                            builder: (context, s) {
+                              final playing = s.data?.playing ?? false;
+                              return IconButton(
+                                iconSize: 56,
+                                icon: Icon(playing ? Icons.pause_circle : Icons.play_circle),
+                                onPressed: () => playing ? Relay.player.pause() : Relay.player.play(),
+                              );
+                            },
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.forward_10),
+                            onPressed: () => Relay.player.seek(
+                                Relay.player.position + const Duration(seconds: 15)),
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.stop),
+                            onPressed: () async {
+                              await Relay.player.stop();
+                              if (context.mounted) Navigator.of(context).pop();
+                            },
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            );
+          },
+        ),
       );
 }
