@@ -3,22 +3,52 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use tauri::AppHandle;
 use tauri::Manager;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::UnixStream;
 use tokio::process::{Child, Command};
 
-const IPC_PREFIX: &str = "/tmp/bkgrnd-mpv-ipc-";
+// mpv's JSON IPC transport differs by platform: a Unix domain socket under /tmp
+// on macOS/Linux, a named pipe on Windows. `IpcStream` + `connect_ipc` hide the
+// difference; everything else reads/writes generically via tokio::io::split.
+#[cfg(unix)]
+type IpcStream = tokio::net::UnixStream;
+#[cfg(windows)]
+type IpcStream = tokio::net::windows::named_pipe::NamedPipeClient;
+
+async fn connect_ipc(path: &str) -> std::io::Result<IpcStream> {
+    #[cfg(unix)]
+    {
+        tokio::net::UnixStream::connect(path).await
+    }
+    #[cfg(windows)]
+    {
+        use tokio::net::windows::named_pipe::ClientOptions;
+        // ERROR_PIPE_BUSY (231): server exists but is momentarily busy — retry.
+        loop {
+            match ClientOptions::new().open(path) {
+                Ok(client) => return Ok(client),
+                Err(e) if e.raw_os_error() == Some(231) => {
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                }
+                Err(e) => return Err(e),
+            }
+        }
+    }
+}
 
 static IPC_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-// Each mpv session gets its own socket so a crashed/stale mpv (or a second
+// Each mpv session gets its own socket/pipe so a crashed/stale mpv (or a second
 // app instance) can never intercept commands meant for the current session.
 fn new_ipc_path() -> String {
-    format!(
-        "{}{}-{}",
-        IPC_PREFIX,
-        std::process::id(),
-        IPC_COUNTER.fetch_add(1, Ordering::Relaxed)
-    )
+    let id = std::process::id();
+    let n = IPC_COUNTER.fetch_add(1, Ordering::Relaxed);
+    #[cfg(unix)]
+    {
+        format!("/tmp/bkgrnd-mpv-ipc-{id}-{n}")
+    }
+    #[cfg(windows)]
+    {
+        format!(r"\\.\pipe\bkgrnd-mpv-ipc-{id}-{n}")
+    }
 }
 
 pub struct MpvSession {
@@ -41,22 +71,28 @@ pub async fn spawn_mpv(
     _url: &str,
 ) -> Result<MpvSession, String> {
     let ipc_path = new_ipc_path();
+    // Unix sockets are files to clean up; Windows named pipes are not.
+    #[cfg(unix)]
     let _ = std::fs::remove_file(&ipc_path);
 
     let mpv_bundle_dir = mpv_dir(app)?;
+    #[cfg(unix)]
     let mpv_bin = mpv_bundle_dir.join("mpv");
+    #[cfg(windows)]
+    let mpv_bin = mpv_bundle_dir.join("mpv.exe");
 
     if !mpv_bin.exists() {
         return Err(format!("mpv binary not found at {:?}", mpv_bin));
     }
 
-    eprintln!(
-        "[mpv] Spawning: {:?} with DYLD_LIBRARY_PATH={:?}",
-        mpv_bin, mpv_bundle_dir
-    );
+    eprintln!("[mpv] Spawning: {:?}", mpv_bin);
 
-    let mut child = Command::new(&mpv_bin)
-        .env("DYLD_LIBRARY_PATH", &mpv_bundle_dir)
+    let mut command = Command::new(&mpv_bin);
+    // macOS: mpv finds its dylibs via DYLD_LIBRARY_PATH. Windows: the DLLs sit
+    // next to mpv.exe in the same dir, so no env is needed.
+    #[cfg(target_os = "macos")]
+    command.env("DYLD_LIBRARY_PATH", &mpv_bundle_dir);
+    let mut child = command
         .args([
             "--no-video",
             &format!("--input-ipc-server={}", ipc_path),
@@ -98,7 +134,13 @@ pub async fn spawn_mpv(
 async fn wait_for_ipc(path: &str, timeout_ms: u64) -> Result<(), String> {
     let start = std::time::Instant::now();
     loop {
-        if std::path::Path::new(path).exists() {
+        // Unix: the socket appears as a file. Windows: probe by connecting (the
+        // named pipe isn't a filesystem path).
+        #[cfg(unix)]
+        let ready = std::path::Path::new(path).exists();
+        #[cfg(windows)]
+        let ready = connect_ipc(path).await.is_ok();
+        if ready {
             return Ok(());
         }
         if start.elapsed().as_millis() as u64 > timeout_ms {
@@ -112,11 +154,11 @@ pub async fn mpv_command(
     ipc_path: &str,
     command: &[serde_json::Value],
 ) -> Result<serde_json::Value, String> {
-    let stream = UnixStream::connect(ipc_path)
+    let stream = connect_ipc(ipc_path)
         .await
         .map_err(|e| format!("mpv IPC connect failed: {}", e))?;
 
-    let (reader, mut writer) = stream.into_split();
+    let (reader, mut writer) = tokio::io::split(stream);
 
     let msg = serde_json::json!({ "command": command });
     let mut msg_str = serde_json::to_string(&msg).unwrap();
@@ -172,10 +214,10 @@ pub struct StatusSnapshot {
 /// connects per poll (each with its own 3s timeout) made a wedged mpv stall
 /// callers for ~9s.
 pub async fn status_snapshot(ipc_path: &str) -> StatusSnapshot {
-    let Ok(stream) = UnixStream::connect(ipc_path).await else {
+    let Ok(stream) = connect_ipc(ipc_path).await else {
         return StatusSnapshot::default();
     };
-    let (reader, mut writer) = stream.into_split();
+    let (reader, mut writer) = tokio::io::split(stream);
 
     let properties = ["pause", "time-pos", "duration"];
     let mut request = String::new();
@@ -252,18 +294,24 @@ pub async fn stop_mpv(session: &mut MpvSession) {
 /// quit) and remove its orphaned sockets. Sockets are namespaced per PID, so
 /// anything on disk that isn't ours is stale.
 pub async fn stop_stale_mpv() {
-    let Ok(entries) = std::fs::read_dir("/tmp") else {
-        return;
-    };
-    let own_prefix = format!("{}{}-", IPC_PREFIX, std::process::id());
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let Some(path_str) = path.to_str() else { continue };
-        if !path_str.starts_with(IPC_PREFIX) || path_str.starts_with(&own_prefix) {
-            continue;
+    // Only Unix leaves socket files behind; Windows named pipes vanish with the
+    // process, so there's nothing to sweep.
+    #[cfg(unix)]
+    {
+        const IPC_PREFIX: &str = "/tmp/bkgrnd-mpv-ipc-";
+        let Ok(entries) = std::fs::read_dir("/tmp") else {
+            return;
+        };
+        let own_prefix = format!("{}{}-", IPC_PREFIX, std::process::id());
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Some(path_str) = path.to_str() else { continue };
+            if !path_str.starts_with(IPC_PREFIX) || path_str.starts_with(&own_prefix) {
+                continue;
+            }
+            let _ = mpv_command(path_str, &[serde_json::json!("quit")]).await;
+            let _ = std::fs::remove_file(&path);
         }
-        let _ = mpv_command(path_str, &[serde_json::json!("quit")]).await;
-        let _ = std::fs::remove_file(&path);
     }
 }
 

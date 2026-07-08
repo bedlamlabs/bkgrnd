@@ -35,17 +35,22 @@ fn ytdlp_binary() -> &'static PathBuf {
             }
         }
 
-        // Bundled sidecar sits next to the app executable (Contents/MacOS).
+        // Bundled sidecar sits next to the app executable (Contents/MacOS on
+        // macOS; the install dir on Windows). Tauri names it per-platform.
+        #[cfg(windows)]
+        let sidecar_name = "yt-dlp.exe";
+        #[cfg(not(windows))]
+        let sidecar_name = "yt-dlp";
         if let Ok(exe) = std::env::current_exe() {
             if let Some(dir) = exe.parent() {
-                let sidecar = dir.join("yt-dlp");
+                let sidecar = dir.join(sidecar_name);
                 if sidecar.is_file() {
-                    eprintln!("[ytdlp] using bundled sidecar (slow startup; install yt-dlp via homebrew for faster resolves)");
+                    eprintln!("[ytdlp] using bundled sidecar (slow startup; install a native yt-dlp for faster resolves)");
                     return sidecar;
                 }
             }
         }
-        PathBuf::from("yt-dlp")
+        PathBuf::from(sidecar_name)
     })
 }
 
