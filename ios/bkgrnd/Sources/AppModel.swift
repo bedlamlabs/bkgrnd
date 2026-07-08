@@ -11,6 +11,10 @@ enum PlaybackScope: String, CaseIterable {
 
 @MainActor
 final class AppModel: ObservableObject {
+  /// Single instance shared by the SwiftUI phone UI and the CarPlay scene so
+  /// both drive the same queue, player, and Now Playing state.
+  static let shared = AppModel()
+
   @Published var playlists: PlaylistDoc?
   @Published var recentPlaylist: Playlist?
   @Published var isLoadingPlaylists = false

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  CarPlay audio app entitlement. Apple must grant this on your App ID before
+	  a provisioning profile can carry it; wiring it (CODE_SIGN_ENTITLEMENTS in
+	  project.yml) before it is granted will break automatic signing.
+	-->
+	<key>com.apple.developer.carplay-audio</key>
+	<true/>
+</dict>
+</plist>

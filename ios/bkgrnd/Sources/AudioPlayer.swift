@@ -37,7 +37,30 @@ final class AudioPlayer: ObservableObject {
   private var nowPlayingArtist = ""
   private var nowPlayingArtwork: MPMediaItemArtwork?
 
+  /// True if playback was active when an interruption (call/SMS/other audio)
+  /// began — the cue to resume once the interruption ends.
+  private var wasPlayingBeforeInterruption = false
+  private var interruptionObserver: NSObjectProtocol?
+
   init() {
+    // Auto-resume after a call/SMS/other-audio interruption. Without this
+    // observer nothing ever restarts the stream once iOS pauses it.
+    interruptionObserver = NotificationCenter.default.addObserver(
+      forName: AVAudioSession.interruptionNotification,
+      object: nil,
+      queue: .main
+    ) { [weak self] note in
+      guard
+        let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
+        let type = AVAudioSession.InterruptionType(rawValue: raw)
+      else { return }
+      let optionsRaw = (note.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt) ?? 0
+      let options = AVAudioSession.InterruptionOptions(rawValue: optionsRaw)
+      Task { @MainActor in
+        self?.handleInterruption(type: type, options: options)
+      }
+    }
+
     timeObserver = player.addPeriodicTimeObserver(
       forInterval: CMTime(seconds: 1.0, preferredTimescale: 600),
       queue: DispatchQueue.main
@@ -69,6 +92,12 @@ final class AudioPlayer: ObservableObject {
           self.onAdvanced?()
         }
       }
+    }
+  }
+
+  deinit {
+    if let interruptionObserver {
+      NotificationCenter.default.removeObserver(interruptionObserver)
     }
   }
 
@@ -182,6 +211,44 @@ final class AudioPlayer: ObservableObject {
         default:
           break
         }
+      }
+    }
+  }
+
+  /// Pause on interruption-began; on interruption-ended, resume if we had been
+  /// playing. We resume whenever playback was active (not only when the system
+  /// sets `.shouldResume`) — for calls that flag is unreliable, and this is a
+  /// music app where the user expects the stream to pick back up.
+  private func handleInterruption(type: AVAudioSession.InterruptionType, options: AVAudioSession.InterruptionOptions) {
+    switch type {
+    case .began:
+      wasPlayingBeforeInterruption = isPlaying
+      isPlaying = false
+      pushNowPlayingInfo()
+    case .ended:
+      guard wasPlayingBeforeInterruption else { return }
+      wasPlayingBeforeInterruption = false
+      resumeAfterInterruption(retries: 3)
+    @unknown default:
+      break
+    }
+  }
+
+  /// Reactivating the session right after a phone call can transiently fail
+  /// (AVAudioSession error 560557684 / `.cannotStartPlaying`); retry briefly.
+  private func resumeAfterInterruption(retries: Int) {
+    do {
+      try AVAudioSession.sharedInstance().setActive(true)
+      player.play()
+      isPlaying = true
+      pushNowPlayingInfo()
+    } catch {
+      guard retries > 0 else {
+        log.error("resume after interruption failed: \(String(describing: error), privacy: .public)")
+        return
+      }
+      DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+        Task { @MainActor in self?.resumeAfterInterruption(retries: retries - 1) }
       }
     }
   }
