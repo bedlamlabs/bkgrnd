@@ -252,6 +252,11 @@ final class AppModel: ObservableObject {
   private func startPlayback(_ item: PlaylistItem) async {
     guard let url = URL(string: item.url) else { return }
     nowPlaying = item
+    // Pasted URLs arrive titled with the raw link (and no artwork). Resolve the
+    // real name/thumbnail in the background and patch Now Playing.
+    if item.title == item.url {
+      Task { await self.enrichNowPlaying(item, url: url) }
+    }
     statusMessage = "resolving"
     await syncClientConfig()
     // Warm the resolver so the stream request is a cache hit.
@@ -262,6 +267,20 @@ final class AppModel: ObservableObject {
     statusMessage = ""
     recordAppPlay(item.url)
     enqueueUpcoming()
+  }
+
+  /// Fetch a pasted URL's real title/channel/thumbnail and patch Now Playing
+  /// (UI + lock screen), if it's still the current track.
+  private func enrichNowPlaying(_ item: PlaylistItem, url: URL) async {
+    guard let meta = await client.meta(for: url), !meta.title.isEmpty else { return }
+    guard nowPlaying?.url == item.url else { return }
+    var updated = item
+    updated.title = meta.title
+    if !meta.channel.isEmpty { updated.channel = meta.channel }
+    if (updated.thumbnail ?? "").isEmpty, !meta.thumbnail.isEmpty { updated.thumbnail = meta.thumbnail }
+    nowPlaying = updated
+    if queue.indices.contains(queueIndex) { queue[queueIndex] = updated }
+    audioPlayer.setNowPlayingMeta(title: updated.title, artist: updated.channel ?? "", artworkURL: displayArtwork ?? updated.thumbnail)
   }
 
   /// Pre-resolve and pre-enqueue the next queue track so AVQueuePlayer can

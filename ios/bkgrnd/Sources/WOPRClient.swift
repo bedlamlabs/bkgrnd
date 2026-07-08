@@ -141,6 +141,25 @@ actor WOPRClient {
     return try JSONDecoder().decode([SearchResult].self, from: data)
   }
 
+  struct MetaResponse: Decodable {
+    var title: String = ""
+    var channel: String = ""
+    var thumbnail: String = ""
+  }
+
+  /// Video title/channel/thumbnail via the relay's oEmbed proxy — lets a pasted
+  /// URL show a real name instead of the raw link.
+  func meta(for sourceURL: URL) async -> MetaResponse? {
+    var comps = URLComponents(url: config.baseURL.appendingPathComponent("/api/v1/meta"), resolvingAgainstBaseURL: false)!
+    comps.queryItems = [URLQueryItem(name: "url", value: sourceURL.absoluteString)]
+    var req = URLRequest(url: comps.url!)
+    req.httpMethod = "GET"
+    addAuth(&req)
+    guard let (data, resp) = try? await URLSession.shared.data(for: req),
+          (resp as? HTTPURLResponse)?.statusCode == 200 else { return nil }
+    return try? JSONDecoder().decode(MetaResponse.self, from: data)
+  }
+
   func fetchLocalStatus() async throws -> LocalStatusResponse {
     var req = URLRequest(url: config.baseURL.appendingPathComponent("/api/v1/local/status"))
     req.httpMethod = "GET"
