@@ -353,6 +353,18 @@ fn cookie_response(status: StatusCode, set_cookie: String) -> Response<Body> {
     resp
 }
 
+/// Login/register success: set the session cookie (for the PWA) AND return the
+/// token in the body. Native clients (Android app) can't easily juggle cookies,
+/// so they read the token here and send it back as `Cookie: bkgrnd_session=…`.
+fn session_response(username: &str, token: &str) -> Response<Body> {
+    let mut resp =
+        Json(serde_json::json!({ "username": username, "token": token })).into_response();
+    if let Ok(val) = HeaderValue::from_str(&auth::session_set_cookie(token)) {
+        resp.headers_mut().append(header::SET_COOKIE, val);
+    }
+    resp
+}
+
 /// Create a user (open unless WOPR_REGISTRATION_OPEN=0) and log them in.
 async fn pwa_register(State(state): State<AppState>, Json(req): Json<CredsRequest>) -> Response<Body> {
     if !state.registration_open {
@@ -392,7 +404,7 @@ async fn pwa_register(State(state): State<AppState>, Json(req): Json<CredsReques
     drop(users);
 
     let token = auth::mint_session(&state.session_secret, &username, auth::SESSION_TTL_SECS);
-    cookie_response(StatusCode::OK, auth::session_set_cookie(&token))
+    session_response(&username, &token)
 }
 
 async fn pwa_login(State(state): State<AppState>, Json(req): Json<CredsRequest>) -> Response<Body> {
@@ -410,7 +422,7 @@ async fn pwa_login(State(state): State<AppState>, Json(req): Json<CredsRequest>)
         return (StatusCode::UNAUTHORIZED, "Invalid username or password").into_response();
     }
     let token = auth::mint_session(&state.session_secret, &username, auth::SESSION_TTL_SECS);
-    cookie_response(StatusCode::OK, auth::session_set_cookie(&token))
+    session_response(&username, &token)
 }
 
 async fn pwa_logout() -> Response<Body> {
