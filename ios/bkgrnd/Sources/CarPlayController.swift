@@ -1,5 +1,6 @@
 import CarPlay
 import Combine
+import OSLog
 import UIKit
 
 /// Drives the CarPlay interface from the shared `AppModel`. Presents the Recent
@@ -13,32 +14,41 @@ final class CarPlayController {
 
   private let model = AppModel.shared
   private var interfaceController: CPInterfaceController?
+  private var rootList: CPListTemplate?
+  private var lastRenderedKeys: [String] = []
   private var cancellables = Set<AnyCancellable>()
+  private let log = Logger(subsystem: "com.bedlamlabs.bkgrnd.ios", category: "carplay")
 
   private init() {}
 
   func connect(_ interfaceController: CPInterfaceController) {
     self.interfaceController = interfaceController
-    interfaceController.setRootTemplate(makeListTemplate(), animated: false, completion: nil)
+    let list = makeListTemplate()
+    rootList = list
+    interfaceController.setRootTemplate(list, animated: false, completion: nil)
 
-    // Rebuild rows whenever the Recent playlist loads or re-sorts.
+    // Rebuild rows when the library loads/changes. Use DispatchQueue.main, not
+    // RunLoop.main — RunLoop.main delivery can be dropped while CarPlay is
+    // interacting, which left the list blank if data arrived after connect.
     model.$recentPlaylist
-      .receive(on: RunLoop.main)
-      .sink { [weak self] _ in self?.reloadRootTemplate() }
-      .store(in: &cancellables)
-    model.objectWillChange
-      .receive(on: RunLoop.main)
+      .receive(on: DispatchQueue.main)
       .sink { [weak self] _ in self?.reloadRootTemplate() }
       .store(in: &cancellables)
 
-    if model.recentPlaylist == nil {
-      Task { await model.refreshPlaylists() }
+    // Always pull the latest library on (re)connect, then render whatever we
+    // have now (covers both "already loaded" and "loads a moment later").
+    Task { [weak self] in
+      await self?.model.refreshPlaylists()
+      self?.reloadRootTemplate()
     }
+    reloadRootTemplate()
   }
 
   func disconnect() {
     cancellables.removeAll()
     interfaceController = nil
+    rootList = nil
+    lastRenderedKeys = []
   }
 
   // MARK: - Templates
@@ -51,9 +61,13 @@ final class CarPlayController {
   }
 
   private func reloadRootTemplate() {
-    guard let rootList = interfaceController?.rootTemplate as? CPListTemplate else { return }
-    let section = CPListSection(items: model.gridItems.map(makeListItem))
-    rootList.updateSections([section])
+    guard let rootList else { return }
+    let items = model.gridItems
+    let keys = items.map(\.url)
+    guard keys != lastRenderedKeys else { return }
+    lastRenderedKeys = keys
+    log.info("carplay list render: \(items.count, privacy: .public) items")
+    rootList.updateSections([CPListSection(items: items.map(makeListItem))])
   }
 
   private func makeListItem(_ item: PlaylistItem) -> CPListItem {
