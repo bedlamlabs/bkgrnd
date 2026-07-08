@@ -827,6 +827,47 @@ struct ThumbnailQuery {
     token: Option<String>,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MetaResponse {
+    title: String,
+    channel: String,
+    thumbnail: String,
+}
+
+/// Video metadata (title/channel/thumbnail) via YouTube oEmbed. Lets clients
+/// show a real name for a pasted URL instead of the raw link. Server-side so it
+/// works for the PWA too (YouTube's oEmbed has no CORS headers for browsers).
+async fn video_meta(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<ResolveQuery>,
+) -> impl IntoResponse {
+    if !state.authorized(&headers, q.token.as_deref()) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let resp = state
+        .http
+        .get("https://www.youtube.com/oembed")
+        .query(&[("url", q.url.as_str()), ("format", "json")])
+        .send()
+        .await;
+    if let Ok(resp) = resp {
+        if resp.status().is_success() {
+            if let Ok(v) = resp.json::<serde_json::Value>().await {
+                let s = |k: &str| v.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string();
+                return axum::Json(MetaResponse {
+                    title: s("title"),
+                    channel: s("author_name"),
+                    thumbnail: s("thumbnail_url"),
+                })
+                .into_response();
+            }
+        }
+    }
+    StatusCode::NOT_FOUND.into_response()
+}
+
 async fn resolve_stream(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1944,6 +1985,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/v1/search", get(search))
         .route("/api/v1/spotify/queue", get(spotify_queue))
         .route("/api/v1/resolve", get(resolve_stream))
+        .route("/api/v1/meta", get(video_meta))
         .route("/api/v1/prewarm", get(prewarm_stream))
         .route("/api/v1/stream", get(stream_audio))
         .route("/api/v1/thumbnail", get(thumbnail_image))

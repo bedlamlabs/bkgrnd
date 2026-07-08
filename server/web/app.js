@@ -651,6 +651,7 @@ async function playRemoteTrack(item) {
   activeResolveMeta = null;
   renderMiniPlayer();
   renderPlayer();
+  maybeEnrichMeta(item); // fix title/artwork for pasted links (fire-and-forget)
 
   startAcquisitionStatus(sourceUrl);
   const streamUrl = await resolveStreamUrl(sourceUrl);
@@ -730,6 +731,27 @@ async function resolveStreamUrl(sourceUrl) {
     setPlayerStatus("error");
     return "";
   }
+}
+
+// Pasted URLs start with the raw link as their title (and no channel). Fetch
+// the real name/artwork from the relay's oEmbed proxy and patch it in.
+async function maybeEnrichMeta(item) {
+  if (!item || item.title !== item.url) return; // only untitled pasted links
+  try {
+    const url = new URL("api/v1/meta", apiBaseHref());
+    url.searchParams.set("url", item.url);
+    const resp = await req(url.toString());
+    if (!resp.ok) return;
+    const meta = await resp.json();
+    if (meta.title) item.title = meta.title;
+    if (meta.channel) item.channel = meta.channel;
+    if (meta.thumbnail && !item.thumbnail) item.thumbnail = meta.thumbnail;
+    if (getCurrentNow()?.url === item.url) {
+      renderMiniPlayer();
+      renderPlayer();
+      updateMediaSessionMetadata();
+    }
+  } catch {}
 }
 
 // A stream that fails to start stays pinned in Now Playing (with the failure
