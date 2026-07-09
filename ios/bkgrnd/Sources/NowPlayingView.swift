@@ -8,6 +8,12 @@ struct NowPlayingView: View {
   @EnvironmentObject var appModel: AppModel
   @Environment(\.dismiss) private var dismiss
 
+  // The title/subtitle block dims away a few seconds into playback so the
+  // artwork carries the stage; a tap anywhere brings it back (and restarts
+  // the timer). Paused playback keeps it up.
+  @State private var titleVisible = true
+  @State private var autoHideWork: DispatchWorkItem?
+
   // Scope-driven like the mini player: the stage controls whichever player
   // the active scope refers to.
   private var isLocal: Bool { appModel.scope == .recent && appModel.nowPlaying != nil }
@@ -64,6 +70,8 @@ struct NowPlayingView: View {
         topRow
         Spacer()
         copyBlock
+          .opacity(titleVisible ? 1 : 0)
+          .animation(.easeInOut(duration: 0.6), value: titleVisible)
         progressBlock
         controlsRow
       }
@@ -72,6 +80,30 @@ struct NowPlayingView: View {
       .padding(.bottom, 24)
     }
     .preferredColorScheme(.dark)
+    .contentShape(Rectangle())
+    .onTapGesture { revealTitle() }
+    .onAppear { scheduleAutoHide() }
+    .onChange(of: title) { revealTitle() }
+    .onChange(of: isPaused) { _, paused in
+      if paused { revealTitle(autoHide: false) } else { scheduleAutoHide() }
+    }
+  }
+
+  /// Bring the title back and (unless paused) restart the fade timer.
+  private func revealTitle(autoHide: Bool = true) {
+    withAnimation(.easeInOut(duration: 0.25)) { titleVisible = true }
+    if autoHide { scheduleAutoHide() } else { autoHideWork?.cancel() }
+  }
+
+  /// Fade the title after a few seconds of active playback.
+  private func scheduleAutoHide() {
+    autoHideWork?.cancel()
+    let work = DispatchWorkItem {
+      guard !isPaused else { return }
+      withAnimation(.easeInOut(duration: 0.7)) { titleVisible = false }
+    }
+    autoHideWork = work
+    DispatchQueue.main.asyncAfter(deadline: .now() + 4, execute: work)
   }
 
   private var topRow: some View {

@@ -654,13 +654,12 @@ async function playRemoteTrack(item) {
   maybeEnrichMeta(item); // fix title/artwork for pasted links (fire-and-forget)
 
   startAcquisitionStatus(sourceUrl);
-  const streamUrl = await resolveStreamUrl(sourceUrl);
-  if (playToken !== remotePlayToken) return true;
-  if (!streamUrl) {
-    markPlaybackFailed("couldn't play");
-    return false;
-  }
 
+  // Start fetching the proxied stream immediately. /api/v1/stream resolves
+  // (and caches) on-demand, so we no longer block the first byte on a separate
+  // awaited /resolve — that serialized a cold ~1.6s+ yt-dlp resolve ahead of
+  // the <audio> element. A hard resolve failure still surfaces via the audio
+  // "error" listener → markPlaybackFailed.
   activeSourceUrl = sourceUrl;
   activeStreamUrl = proxiedStreamUrl(sourceUrl);
   audio.src = activeStreamUrl;
@@ -679,6 +678,10 @@ async function playRemoteTrack(item) {
     cleanupFailedAudio();
     setPlayerStatus("tap");
   }
+
+  // Resolve in the background only to upgrade the status label (cached / source
+  // / resolve time). Non-blocking — playback has already begun.
+  resolveStreamUrl(sourceUrl).catch(() => {});
   return true;
 }
 

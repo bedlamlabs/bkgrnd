@@ -43,6 +43,13 @@ final class AudioPlayer: ObservableObject {
   private var interruptionObserver: NSObjectProtocol?
 
   init() {
+    // Start as soon as the first playable data arrives instead of letting
+    // AVPlayer's stall-avoidance heuristic sit on a cold item filling its
+    // forward buffer first — that heuristic was the bulk of the 12-15s
+    // start delay on new streams. The proxy serves the head fast (~1MB in
+    // 0.1s), so early-start rarely stalls.
+    player.automaticallyWaitsToMinimizeStalling = false
+
     // Auto-resume after a call/SMS/other-audio interruption. Without this
     // observer nothing ever restarts the stream once iOS pauses it.
     interruptionObserver = NotificationCenter.default.addObserver(

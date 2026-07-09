@@ -27,7 +27,17 @@ class Track {
 /// `Cookie: bkgrnd_session=…`. YouTube-only in v1; streams the proxied endpoint.
 class Relay {
   static const base = 'https://bkgrnd.bedl.am';
-  static final AudioPlayer player = AudioPlayer();
+  // Start on a small pre-roll instead of ExoPlayer's default ~2.5s buffer —
+  // the parity of the iOS `automaticallyWaitsToMinimizeStalling = false` fix.
+  // The relay proxy serves the head fast, so early-start rarely stalls.
+  static final AudioPlayer player = AudioPlayer(
+    audioLoadConfiguration: const AudioLoadConfiguration(
+      androidLoadControl: AndroidLoadControl(
+        bufferForPlaybackDuration: Duration(milliseconds: 500),
+        bufferForPlaybackAfterRebufferDuration: Duration(seconds: 2),
+      ),
+    ),
+  );
   static String? _token;
   static Map<String, dynamic>? _libraryDoc; // raw doc, for bookmark add/remove
 

@@ -259,8 +259,10 @@ final class AppModel: ObservableObject {
     }
     statusMessage = "resolving"
     await syncClientConfig()
-    // Warm the resolver so the stream request is a cache hit.
-    await client.prewarm(sourceURL: url)
+    // No blocking prewarm here: /api/v1/stream resolves (and caches) on-demand,
+    // so awaiting a separate prewarm just serialized the cold yt-dlp resolve
+    // (~1.6s, worse under load) ahead of AVPlayer. Hand the proxy URL straight
+    // to the player and let the resolve overlap with its connection setup.
     let stream = await client.streamURL(for: url)
     let headers = await client.streamHeaders()
     await audioPlayer.play(url: stream, headers: headers, title: item.title, artist: item.channel ?? "", artworkURL: displayArtwork ?? item.thumbnail)
