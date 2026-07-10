@@ -215,6 +215,13 @@ final class AudioPlayer: ObservableObject {
           self.onPlaybackError?((error as NSError?)?.localizedDescription ?? "playback failed")
         case .readyToPlay:
           self.log.info("player item ready")
+          // With automaticallyWaitsToMinimizeStalling = false, a play() issued
+          // before the item was ready is a no-op and AVPlayer will NOT auto-start
+          // when data arrives (the default true does). Kick it now that the item
+          // is playable — gated on our intent so a pre-ready pause still holds.
+          if self.isPlaying, item === self.player.currentItem {
+            self.player.play()
+          }
         default:
           break
         }
