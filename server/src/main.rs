@@ -1239,6 +1239,73 @@ async fn stream_audio(
     }
 }
 
+/// Serve media metadata without opening a streaming response. Axum maps HEAD
+/// to a GET handler by default, but that handler builds a live body from the
+/// upstream stream. Clients such as AVPlayer then receive the GET headers and
+/// wait forever for a body that HEAD correctly suppresses.
+async fn stream_head(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<StreamQuery>,
+) -> impl IntoResponse {
+    let cast_ok = q
+        .castsig
+        .as_deref()
+        .map(|sig| auth::verify_cast_sig(&state.session_secret, sig))
+        .unwrap_or(false);
+    if !cast_ok && !state.authorized(&headers, q.token.as_deref()) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+
+    let direct_url = match resolve_stream_url(&state, &q.url).await {
+        Ok(u) => u.url,
+        Err(e) => {
+            error!("resolve_stream_url failed for HEAD: {e}");
+            return StatusCode::BAD_REQUEST.into_response();
+        }
+    };
+
+    if q.proxy != Some(true) {
+        return Redirect::temporary(&direct_url).into_response();
+    }
+
+    // Prefer a true upstream HEAD so Content-Length describes the complete
+    // representation. Some media hosts reject HEAD, so fall back to a single
+    // byte GET solely to obtain range metadata; its body is dropped.
+    let upstream = match state.http.head(direct_url.as_str()).send().await {
+        Ok(r) if r.status().is_success() || r.status().as_u16() == 206 => r,
+        _ => match state
+            .http
+            .get(direct_url.as_str())
+            .header(header::RANGE, "bytes=0-0")
+            .send()
+            .await
+        {
+            Ok(r) if r.status().is_success() || r.status().as_u16() == 206 => r,
+            _ => {
+                evict_stream_cache(&state, &q.url).await;
+                return StatusCode::BAD_GATEWAY.into_response();
+            }
+        },
+    };
+
+    let mut resp = Response::builder()
+        .status(upstream.status())
+        .body(Body::empty())
+        .unwrap();
+    for name in [
+        header::CONTENT_TYPE,
+        header::CONTENT_LENGTH,
+        header::CONTENT_RANGE,
+        header::ACCEPT_RANGES,
+    ] {
+        if let Some(value) = upstream.headers().get(&name) {
+            resp.headers_mut().insert(name, value.clone());
+        }
+    }
+    resp
+}
+
 /// Extract the total size from a Content-Range header ("bytes 0-99/1234").
 fn parse_content_range_total(value: &str) -> Option<u64> {
     value.rsplit('/').next()?.trim().parse::<u64>().ok()
@@ -1987,7 +2054,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/v1/resolve", get(resolve_stream))
         .route("/api/v1/meta", get(video_meta))
         .route("/api/v1/prewarm", get(prewarm_stream))
-        .route("/api/v1/stream", get(stream_audio))
+        .route("/api/v1/stream", get(stream_audio).head(stream_head))
         .route("/api/v1/thumbnail", get(thumbnail_image))
         // Serve the stopgap web app from the same origin to avoid CORS hassles.
         .fallback_service(ServeDir::new(web_dir).append_index_html_on_directories(true))
