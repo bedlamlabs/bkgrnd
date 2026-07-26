@@ -1281,6 +1281,7 @@ async fn stream_segment(
         .headers()
         .get(header::CONTENT_TYPE)
         .cloned()
+        .filter(|value| value != &HeaderValue::from_static("application/octet-stream"))
         .unwrap_or_else(|| HeaderValue::from_static("video/mp2t"));
     let content_length = upstream.headers().get(header::CONTENT_LENGTH).cloned();
     let content_range = upstream.headers().get(header::CONTENT_RANGE).cloned();
@@ -1293,6 +1294,55 @@ async fn stream_segment(
     if let Some(value) = content_length { resp.headers_mut().insert(header::CONTENT_LENGTH, value); }
     if let Some(value) = content_range { resp.headers_mut().insert(header::CONTENT_RANGE, value); }
     if let Some(value) = accept_ranges { resp.headers_mut().insert(header::ACCEPT_RANGES, value); }
+    resp
+}
+
+async fn stream_segment_head(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<StreamSegmentQuery>,
+) -> impl IntoResponse {
+    if !state.authorized(&headers, q.token.as_deref()) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let Ok(parsed) = url::Url::parse(&q.url) else {
+        return StatusCode::BAD_REQUEST.into_response();
+    };
+    let host = parsed.host_str().unwrap_or("").to_ascii_lowercase();
+    if parsed.scheme() != "https" || !host.ends_with("googlevideo.com") {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+
+    let upstream = match state.http.head(parsed.clone()).send().await {
+        Ok(r) if r.status().is_success() || r.status().as_u16() == 206 => r,
+        _ => match state
+            .http
+            .get(parsed)
+            .header(header::RANGE, "bytes=0-0")
+            .send()
+            .await
+        {
+            Ok(r) if r.status().is_success() || r.status().as_u16() == 206 => r,
+            _ => return StatusCode::BAD_GATEWAY.into_response(),
+        },
+    };
+    let status = upstream.status();
+    let content_type = upstream
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .cloned()
+        .filter(|value| value != &HeaderValue::from_static("application/octet-stream"))
+        .unwrap_or_else(|| HeaderValue::from_static("video/mp2t"));
+    let content_length = upstream.headers().get(header::CONTENT_LENGTH).cloned();
+    let content_range = upstream.headers().get(header::CONTENT_RANGE).cloned();
+    let mut resp = Response::builder()
+        .status(status)
+        .body(Body::empty())
+        .unwrap();
+    resp.headers_mut().insert(header::CONTENT_TYPE, content_type);
+    if let Some(value) = content_length { resp.headers_mut().insert(header::CONTENT_LENGTH, value); }
+    if let Some(value) = content_range { resp.headers_mut().insert(header::CONTENT_RANGE, value); }
+    resp.headers_mut().insert(header::ACCEPT_RANGES, HeaderValue::from_static("bytes"));
     resp
 }
 
@@ -2133,7 +2183,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/v1/meta", get(video_meta))
         .route("/api/v1/prewarm", get(prewarm_stream))
         .route("/api/v1/stream", get(stream_audio).head(stream_head))
-        .route("/api/v1/stream-segment", get(stream_segment))
+        .route("/api/v1/stream-segment", get(stream_segment).head(stream_segment_head))
         .route("/api/v1/thumbnail", get(thumbnail_image))
         // Serve the stopgap web app from the same origin to avoid CORS hassles.
         .fallback_service(ServeDir::new(web_dir).append_index_html_on_directories(true))
