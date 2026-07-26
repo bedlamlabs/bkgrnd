@@ -801,6 +801,12 @@ struct StreamQuery {
 }
 
 #[derive(Debug, Deserialize)]
+struct StreamSegmentQuery {
+    url: String,
+    token: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 struct ResolveQuery {
     url: String,
     token: Option<String>,
@@ -1060,16 +1066,20 @@ async fn stream_audio(
             evict_stream_cache(&state, &q.url).await;
             return StatusCode::BAD_GATEWAY.into_response();
         }
+        let status = upstream.status();
         let content_type = upstream
             .headers()
             .get(header::CONTENT_TYPE)
             .and_then(|v| v.to_str().ok())
             .unwrap_or("application/vnd.apple.mpegurl")
             .to_string();
-        let status = upstream.status();
+        let manifest = match upstream.text().await {
+            Ok(body) => rewrite_hls_manifest(&body, q.token.as_deref()),
+            Err(_) => return StatusCode::BAD_GATEWAY.into_response(),
+        };
         let mut resp = Response::builder()
             .status(status)
-            .body(Body::from_stream(upstream.bytes_stream()))
+            .body(Body::from(manifest))
             .unwrap();
         resp.headers_mut().insert(
             header::CONTENT_TYPE,
@@ -1237,6 +1247,74 @@ async fn stream_audio(
             resp
         }
     }
+}
+
+/// Proxy HLS media segments through HPX. YouTube's segment URLs are commonly
+/// IP-bound to the machine that resolved them, so handing them to AVPlayer
+/// directly works on HPX but fails from an iPhone.
+async fn stream_segment(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<StreamSegmentQuery>,
+) -> impl IntoResponse {
+    if !state.authorized(&headers, q.token.as_deref()) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let Ok(parsed) = url::Url::parse(&q.url) else {
+        return StatusCode::BAD_REQUEST.into_response();
+    };
+    let host = parsed.host_str().unwrap_or("").to_ascii_lowercase();
+    if parsed.scheme() != "https" || !host.ends_with("googlevideo.com") {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+
+    let mut req = state.http.get(parsed);
+    if let Some(range) = headers.get(header::RANGE) {
+        req = req.header(header::RANGE, range);
+    }
+    let upstream = match req.send().await {
+        Ok(r) if r.status().is_success() || r.status().as_u16() == 206 => r,
+        _ => return StatusCode::BAD_GATEWAY.into_response(),
+    };
+    let status = upstream.status();
+    let content_type = upstream
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .cloned()
+        .unwrap_or_else(|| HeaderValue::from_static("video/mp2t"));
+    let content_length = upstream.headers().get(header::CONTENT_LENGTH).cloned();
+    let content_range = upstream.headers().get(header::CONTENT_RANGE).cloned();
+    let accept_ranges = upstream.headers().get(header::ACCEPT_RANGES).cloned();
+    let mut resp = Response::builder()
+        .status(status)
+        .body(Body::from_stream(upstream.bytes_stream()))
+        .unwrap();
+    resp.headers_mut().insert(header::CONTENT_TYPE, content_type);
+    if let Some(value) = content_length { resp.headers_mut().insert(header::CONTENT_LENGTH, value); }
+    if let Some(value) = content_range { resp.headers_mut().insert(header::CONTENT_RANGE, value); }
+    if let Some(value) = accept_ranges { resp.headers_mut().insert(header::ACCEPT_RANGES, value); }
+    resp
+}
+
+fn rewrite_hls_manifest(manifest: &str, token: Option<&str>) -> String {
+    manifest
+        .lines()
+        .map(|line| {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                line.to_string()
+            } else {
+                let mut proxy = url::Url::parse("https://bkgrnd.invalid/api/v1/stream-segment")
+                    .unwrap();
+                proxy.query_pairs_mut().append_pair("url", trimmed);
+                if let Some(token) = token.filter(|t| !t.is_empty()) {
+                    proxy.query_pairs_mut().append_pair("token", token);
+                }
+                format!("{}?{}", proxy.path(), proxy.query().unwrap_or_default())
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Serve media metadata without opening a streaming response. Axum maps HEAD
@@ -2055,6 +2133,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/v1/meta", get(video_meta))
         .route("/api/v1/prewarm", get(prewarm_stream))
         .route("/api/v1/stream", get(stream_audio).head(stream_head))
+        .route("/api/v1/stream-segment", get(stream_segment))
         .route("/api/v1/thumbnail", get(thumbnail_image))
         // Serve the stopgap web app from the same origin to avoid CORS hassles.
         .fallback_service(ServeDir::new(web_dir).append_index_html_on_directories(true))
@@ -2162,6 +2241,15 @@ mod tests {
         assert_eq!(parse_content_range_total("bytes 0-99/1234"), Some(1234));
         assert_eq!(parse_content_range_total("bytes 0-99/*"), None);
         assert_eq!(parse_content_range_total("garbage"), None);
+    }
+
+    #[test]
+    fn rewrites_hls_segments_through_relay() {
+        let manifest = "#EXTM3U\n#EXTINF:5,\nhttps://rr9---sn.googlevideo.com/videoplayback/file/seg.ts";
+        let rewritten = rewrite_hls_manifest(manifest, Some("secret"));
+        assert!(rewritten.contains("/api/v1/stream-segment?url="));
+        assert!(rewritten.contains("token=secret"));
+        assert!(!rewritten.contains("googlevideo.com/videoplayback/file/seg.ts\n"));
     }
 
     #[test]
