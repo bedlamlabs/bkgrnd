@@ -22,8 +22,8 @@ use std::{
 use tokio::sync::{Mutex, Notify, Semaphore};
 use tokio::task::JoinSet;
 use tokio::time::timeout;
-use tracing::{error, info, warn};
 use tower_http::services::ServeDir;
+use tracing::{error, info, warn};
 
 const YTDLP_RESOLVE_TIMEOUT: Duration = Duration::from_secs(60);
 const YTDLP_SEARCH_TIMEOUT: Duration = Duration::from_secs(30);
@@ -88,7 +88,11 @@ impl AppState {
         match principal {
             Principal::Bearer => playlists_path(&self.data_dir),
             Principal::User(user) => {
-                let path = self.data_dir.join("users").join(user).join("playlists.yaml");
+                let path = self
+                    .data_dir
+                    .join("users")
+                    .join(user)
+                    .join("playlists.yaml");
                 self.seed_if_absent(&path, &playlists_path(&self.data_dir), None)
                     .await;
                 path
@@ -112,7 +116,12 @@ impl AppState {
     /// Copy `global` into `path` on first access; if the global file is missing,
     /// write `fallback` (so a new user starts from the current shared library,
     /// or an empty default).
-    async fn seed_if_absent(&self, path: &std::path::Path, global: &std::path::Path, fallback: Option<&[u8]>) {
+    async fn seed_if_absent(
+        &self,
+        path: &std::path::Path,
+        global: &std::path::Path,
+        fallback: Option<&[u8]>,
+    ) {
         if tokio::fs::metadata(path).await.is_ok() {
             return;
         }
@@ -366,7 +375,10 @@ fn session_response(username: &str, token: &str) -> Response<Body> {
 }
 
 /// Create a user (open unless WOPR_REGISTRATION_OPEN=0) and log them in.
-async fn pwa_register(State(state): State<AppState>, Json(req): Json<CredsRequest>) -> Response<Body> {
+async fn pwa_register(
+    State(state): State<AppState>,
+    Json(req): Json<CredsRequest>,
+) -> Response<Body> {
     if !state.registration_open {
         return (StatusCode::FORBIDDEN, "Registration is closed").into_response();
     }
@@ -378,7 +390,11 @@ async fn pwa_register(State(state): State<AppState>, Json(req): Json<CredsReques
             .into_response();
     };
     if req.password.len() < 6 {
-        return (StatusCode::BAD_REQUEST, "Password must be at least 6 characters").into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            "Password must be at least 6 characters",
+        )
+            .into_response();
     }
 
     let mut users = state.users.lock().await;
@@ -557,7 +573,11 @@ async fn put_playlists(
         Err(_) => return (StatusCode::BAD_REQUEST, "Invalid UTF-8").into_response(),
     };
     if let Err(e) = serde_yaml::from_str::<PlaylistDoc>(raw) {
-        return (StatusCode::BAD_REQUEST, format!("Invalid playlist YAML: {e}")).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            format!("Invalid playlist YAML: {e}"),
+        )
+            .into_response();
     }
 
     let _guard = state.playlists_lock.lock().await;
@@ -890,7 +910,8 @@ async fn resolve_stream(
             cached: resolved.cached,
             resolve_ms: started_at.elapsed().as_millis(),
             source: resolved.source,
-        }).into_response(),
+        })
+        .into_response(),
         Err(e) => {
             error!("resolve_stream failed: {e}");
             (StatusCode::BAD_REQUEST, e.user_message).into_response()
@@ -1019,8 +1040,8 @@ async fn stream_audio(
 
     // Resolve once per source URL for a short window. iOS Safari may issue multiple
     // Range/reconnect requests; rerunning yt-dlp for each one causes slow starts/stalls.
-    let direct_url = match resolve_stream_url(&state, &q.url).await {
-        Ok(u) => u.url,
+    let resolved = match resolve_stream_url(&state, &q.url).await {
+        Ok(resolved) => resolved,
         Err(e) => {
             error!("resolve_stream_url failed: {e}");
             if e.terminal {
@@ -1029,6 +1050,7 @@ async fn stream_audio(
             return (StatusCode::BAD_REQUEST, e.user_message).into_response();
         }
     };
+    let mut direct_url = resolved.url;
 
     if q.proxy != Some(true) {
         return Redirect::temporary(&direct_url).into_response();
@@ -1104,14 +1126,50 @@ async fn stream_audio(
         Some(e) => e.min(start + PROXY_CHUNK - 1),
         None => start + PROXY_CHUNK - 1,
     };
-    let first = match state
+    let first_attempt = state
         .http
         .get(direct_url.as_str())
         .header(header::RANGE, format!("bytes={}-{}", start, first_end))
         .send()
-        .await
-    {
+        .await;
+    let first = match first_attempt {
         Ok(r) if r.status().is_success() || r.status().as_u16() == 206 => r,
+        Ok(r) if resolved.cached && is_stale_stream_status(r.status()) => {
+            warn!(
+                "upstream returned {} for cached stream url; re-resolving and retrying",
+                r.status()
+            );
+            evict_stream_cache(&state, &q.url).await;
+            direct_url = match resolve_stream_url(&state, &q.url).await {
+                Ok(refreshed) => refreshed.url,
+                Err(e) => {
+                    error!("stream re-resolve failed after stale upstream response: {e}");
+                    return StatusCode::BAD_GATEWAY.into_response();
+                }
+            };
+            match state
+                .http
+                .get(direct_url.as_str())
+                .header(header::RANGE, format!("bytes={}-{}", start, first_end))
+                .send()
+                .await
+            {
+                Ok(retry) if retry.status().is_success() || retry.status().as_u16() == 206 => retry,
+                Ok(retry) => {
+                    warn!(
+                        "upstream returned {} after stream URL refresh; evicting cache entry",
+                        retry.status()
+                    );
+                    evict_stream_cache(&state, &q.url).await;
+                    return StatusCode::BAD_GATEWAY.into_response();
+                }
+                Err(e) => {
+                    error!("upstream fetch failed after stream URL refresh: {e}");
+                    evict_stream_cache(&state, &q.url).await;
+                    return StatusCode::BAD_GATEWAY.into_response();
+                }
+            }
+        }
         Ok(r) => {
             warn!(
                 "upstream returned {} for cached stream url; evicting cache entry",
@@ -1144,7 +1202,9 @@ async fn stream_audio(
         // advertising the exact requested range.
         Some(cend) if cend > first_end => {
             let span = cend - start + 1;
-            let total_label = total.map(|t| t.to_string()).unwrap_or_else(|| "*".to_string());
+            let total_label = total
+                .map(|t| t.to_string())
+                .unwrap_or_else(|| "*".to_string());
             let content_range = format!("bytes {}-{}/{}", start, cend, total_label);
 
             let (tx, rx) = tokio::sync::mpsc::channel::<Result<Bytes, std::io::Error>>(8);
@@ -1249,6 +1309,13 @@ async fn stream_audio(
     }
 }
 
+fn is_stale_stream_status(status: StatusCode) -> bool {
+    matches!(
+        status,
+        StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN | StatusCode::NOT_FOUND | StatusCode::GONE
+    )
+}
+
 /// Proxy HLS media segments through HPX. YouTube's segment URLs are commonly
 /// IP-bound to the machine that resolved them, so handing them to AVPlayer
 /// directly works on HPX but fails from an iPhone.
@@ -1290,10 +1357,17 @@ async fn stream_segment(
         .status(status)
         .body(Body::from_stream(upstream.bytes_stream()))
         .unwrap();
-    resp.headers_mut().insert(header::CONTENT_TYPE, content_type);
-    if let Some(value) = content_length { resp.headers_mut().insert(header::CONTENT_LENGTH, value); }
-    if let Some(value) = content_range { resp.headers_mut().insert(header::CONTENT_RANGE, value); }
-    if let Some(value) = accept_ranges { resp.headers_mut().insert(header::ACCEPT_RANGES, value); }
+    resp.headers_mut()
+        .insert(header::CONTENT_TYPE, content_type);
+    if let Some(value) = content_length {
+        resp.headers_mut().insert(header::CONTENT_LENGTH, value);
+    }
+    if let Some(value) = content_range {
+        resp.headers_mut().insert(header::CONTENT_RANGE, value);
+    }
+    if let Some(value) = accept_ranges {
+        resp.headers_mut().insert(header::ACCEPT_RANGES, value);
+    }
     resp
 }
 
@@ -1339,10 +1413,16 @@ async fn stream_segment_head(
         .status(status)
         .body(Body::empty())
         .unwrap();
-    resp.headers_mut().insert(header::CONTENT_TYPE, content_type);
-    if let Some(value) = content_length { resp.headers_mut().insert(header::CONTENT_LENGTH, value); }
-    if let Some(value) = content_range { resp.headers_mut().insert(header::CONTENT_RANGE, value); }
-    resp.headers_mut().insert(header::ACCEPT_RANGES, HeaderValue::from_static("bytes"));
+    resp.headers_mut()
+        .insert(header::CONTENT_TYPE, content_type);
+    if let Some(value) = content_length {
+        resp.headers_mut().insert(header::CONTENT_LENGTH, value);
+    }
+    if let Some(value) = content_range {
+        resp.headers_mut().insert(header::CONTENT_RANGE, value);
+    }
+    resp.headers_mut()
+        .insert(header::ACCEPT_RANGES, HeaderValue::from_static("bytes"));
     resp
 }
 
@@ -1354,8 +1434,8 @@ fn rewrite_hls_manifest(manifest: &str, token: Option<&str>) -> String {
             if trimmed.is_empty() || trimmed.starts_with('#') {
                 line.to_string()
             } else {
-                let mut proxy = url::Url::parse("https://bkgrnd.invalid/api/v1/stream-segment")
-                    .unwrap();
+                let mut proxy =
+                    url::Url::parse("https://bkgrnd.invalid/api/v1/stream-segment").unwrap();
                 proxy.query_pairs_mut().append_pair("url", trimmed);
                 if let Some(token) = token.filter(|t| !t.is_empty()) {
                     proxy.query_pairs_mut().append_pair("token", token);
@@ -1463,7 +1543,10 @@ impl std::fmt::Display for StreamResolveError {
     }
 }
 
-async fn resolve_stream_url(state: &AppState, url: &str) -> Result<ResolvedStream, StreamResolveError> {
+async fn resolve_stream_url(
+    state: &AppState,
+    url: &str,
+) -> Result<ResolvedStream, StreamResolveError> {
     let now = Instant::now();
     {
         let cache = state.stream_cache.lock().await;
@@ -1526,36 +1609,37 @@ async fn resolve_stream_url(state: &AppState, url: &str) -> Result<ResolvedStrea
 
     let start = Instant::now();
     let mut resolved_source = "yt-dlp".to_string();
-    let resolve_result: Result<String, StreamResolveError> = match resolve_direct_url(state, url).await {
-        Ok(url) => Ok(url),
-        Err(e) if e.terminal => {
-            let mut failures = state.stream_failures.lock().await;
-            let now = Instant::now();
-            failures.retain(|_, entry| entry.expires_at > now);
-            failures.insert(
-                url.to_string(),
-                CachedStreamFailure {
-                    user_message: e.user_message.clone(),
-                    technical_message: e.technical_message.clone(),
-                    expires_at: Instant::now() + Duration::from_secs(60 * 60),
-                },
-            );
-            Err(e)
-        }
-        Err(primary_error) => {
-            error!("resolve_direct_url failed: {primary_error}");
-            match resolve_via_piped(&state.http, url).await {
-                Ok(fallback) => {
-                    resolved_source = "piped".to_string();
-                    Ok(fallback)
-                }
-                Err(fallback_error) => {
-                    error!("resolve_via_piped failed: {fallback_error:#}");
-                    Err(primary_error)
+    let resolve_result: Result<String, StreamResolveError> =
+        match resolve_direct_url(state, url).await {
+            Ok(url) => Ok(url),
+            Err(e) if e.terminal => {
+                let mut failures = state.stream_failures.lock().await;
+                let now = Instant::now();
+                failures.retain(|_, entry| entry.expires_at > now);
+                failures.insert(
+                    url.to_string(),
+                    CachedStreamFailure {
+                        user_message: e.user_message.clone(),
+                        technical_message: e.technical_message.clone(),
+                        expires_at: Instant::now() + Duration::from_secs(60 * 60),
+                    },
+                );
+                Err(e)
+            }
+            Err(primary_error) => {
+                error!("resolve_direct_url failed: {primary_error}");
+                match resolve_via_piped(&state.http, url).await {
+                    Ok(fallback) => {
+                        resolved_source = "piped".to_string();
+                        Ok(fallback)
+                    }
+                    Err(fallback_error) => {
+                        error!("resolve_via_piped failed: {fallback_error:#}");
+                        Err(primary_error)
+                    }
                 }
             }
-        }
-    };
+        };
 
     // Always release the per-URL resolve slot, including on the error paths, so
     // `stream_resolves` cannot grow unbounded with one Arc<Mutex> per failed URL.
@@ -1720,7 +1804,10 @@ fn classify_ytdlp_error(stderr: &str) -> StreamResolveError {
             "live stream recording is not available",
             "This live stream recording is not available.",
         ),
-        ("private video", "This video is private and cannot be played."),
+        (
+            "private video",
+            "This video is private and cannot be played.",
+        ),
         ("video unavailable", "This video is unavailable on YouTube."),
         (
             "this video is unavailable",
@@ -1770,11 +1857,20 @@ fn classify_ytdlp_error(stderr: &str) -> StreamResolveError {
 fn extract_youtube_id(url: &str) -> Option<String> {
     // Keep it minimal: support watch?v=, youtu.be/, shorts/.
     // If it isn't YouTube, Piped won't help anyway.
-    let Ok(u) = url::Url::parse(url) else { return None };
+    let Ok(u) = url::Url::parse(url) else {
+        return None;
+    };
     let host = u.host_str()?.to_lowercase();
     if host == "youtu.be" {
-        let id = u.path().trim_start_matches('/').split('/').next().unwrap_or("");
-        if id.len() == 11 { return Some(id.to_string()) }
+        let id = u
+            .path()
+            .trim_start_matches('/')
+            .split('/')
+            .next()
+            .unwrap_or("");
+        if id.len() == 11 {
+            return Some(id.to_string());
+        }
         return None;
     }
     if host.ends_with("youtube.com") {
@@ -1811,7 +1907,9 @@ struct PipedStreamsResponse {
 }
 
 async fn resolve_via_piped(http: &reqwest::Client, url: &str) -> anyhow::Result<String> {
-    let base = std::env::var("WOPR_PIPED_API_BASE").ok().unwrap_or_default();
+    let base = std::env::var("WOPR_PIPED_API_BASE")
+        .ok()
+        .unwrap_or_default();
     if base.trim().is_empty() {
         anyhow::bail!("WOPR_PIPED_API_BASE not set");
     }
@@ -1836,7 +1934,8 @@ async fn resolve_via_piped(http: &reqwest::Client, url: &str) -> anyhow::Result<
         .filter(|s| !s.url.trim().is_empty())
         .max_by_key(|s| {
             let mime = s.mime_type.to_ascii_lowercase();
-            let ios_score = if mime.contains("mp4") || mime.contains("m4a") || mime.contains("mp4a") {
+            let ios_score = if mime.contains("mp4") || mime.contains("m4a") || mime.contains("mp4a")
+            {
                 1_000_000_000
             } else {
                 0
@@ -1892,7 +1991,11 @@ fn parse_search_line(line: &str) -> Option<SearchResult> {
     })
 }
 
-async fn run_ytsearch(state: &AppState, search_arg: &str, limit: usize) -> Result<Vec<SearchResult>, StatusCode> {
+async fn run_ytsearch(
+    state: &AppState,
+    search_arg: &str,
+    limit: usize,
+) -> Result<Vec<SearchResult>, StatusCode> {
     let _permit = state.ytdlp_sem.acquire().await;
 
     // The fast pinned player client speeds search up the same way it speeds
@@ -1929,7 +2032,11 @@ async fn run_ytsearch(state: &AppState, search_arg: &str, limit: usize) -> Resul
     Ok(Vec::new())
 }
 
-async fn search(State(state): State<AppState>, headers: HeaderMap, Query(q): Query<SearchQuery>) -> impl IntoResponse {
+async fn search(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<SearchQuery>,
+) -> impl IntoResponse {
     if !state.authorized(&headers, q.token.as_deref()) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
@@ -1999,7 +2106,9 @@ fn spotify_track_limit(requested: Option<usize>) -> usize {
         .and_then(|value| value.parse::<usize>().ok())
         .filter(|value| *value > 0)
         .unwrap_or(75);
-    requested.filter(|v| *v > 0).map_or(default, |v| v.min(default))
+    requested
+        .filter(|v| *v > 0)
+        .map_or(default, |v| v.min(default))
 }
 
 // Convert a Spotify playlist/album/track into a YouTube-backed queue. Track
@@ -2047,7 +2156,10 @@ async fn spotify_queue(
                     duration: r.duration,
                 }),
                 Err(_) => {
-                    warn!("spotify match search failed for {:?}; skipping", track.display_title());
+                    warn!(
+                        "spotify match search failed for {:?}; skipping",
+                        track.display_title()
+                    );
                     None
                 }
             };
@@ -2092,8 +2204,7 @@ async fn spotify_queue(
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
         .init();
 
@@ -2172,9 +2283,18 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/v1/pwa/me", get(pwa_me))
         .route("/api/v1/pwa/cast-sig", get(pwa_cast_sig))
         .route("/api/v1/playlists", get(get_playlists).put(put_playlists))
-        .route("/api/v1/playlists.json", get(get_playlists_json).put(put_playlists_json))
-        .route("/api/v1/history.json", get(get_history_json).put(put_history_json))
-        .route("/api/v1/local/status", get(get_local_status).put(put_local_status))
+        .route(
+            "/api/v1/playlists.json",
+            get(get_playlists_json).put(put_playlists_json),
+        )
+        .route(
+            "/api/v1/history.json",
+            get(get_history_json).put(put_history_json),
+        )
+        .route(
+            "/api/v1/local/status",
+            get(get_local_status).put(put_local_status),
+        )
         .route("/api/v1/local/commands", post(post_local_command))
         .route("/api/v1/local/commands/next", get(get_next_local_command))
         .route("/api/v1/search", get(search))
@@ -2183,7 +2303,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/v1/meta", get(video_meta))
         .route("/api/v1/prewarm", get(prewarm_stream))
         .route("/api/v1/stream", get(stream_audio).head(stream_head))
-        .route("/api/v1/stream-segment", get(stream_segment).head(stream_segment_head))
+        .route(
+            "/api/v1/stream-segment",
+            get(stream_segment).head(stream_segment_head),
+        )
         .route("/api/v1/thumbnail", get(thumbnail_image))
         // Serve the stopgap web app from the same origin to avoid CORS hassles.
         .fallback_service(ServeDir::new(web_dir).append_index_html_on_directories(true))
@@ -2208,12 +2331,135 @@ async fn main() -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::body::to_bytes;
+    use std::os::unix::fs::PermissionsExt;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static YTDLP_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn test_state(http: reqwest::Client) -> AppState {
+        AppState {
+            data_dir: std::env::temp_dir(),
+            bearer_token: None,
+            playlists_lock: Arc::new(Mutex::new(())),
+            http,
+            stream_cache: Arc::new(Mutex::new(HashMap::new())),
+            stream_failures: Arc::new(Mutex::new(HashMap::new())),
+            stream_resolves: Arc::new(Mutex::new(HashMap::new())),
+            search_cache: Arc::new(Mutex::new(HashMap::new())),
+            ytdlp_sem: Arc::new(Semaphore::new(1)),
+            local_status: Arc::new(Mutex::new(None)),
+            local_commands: Arc::new(Mutex::new(VecDeque::new())),
+            next_local_command_id: Arc::new(Mutex::new(1)),
+            command_notify: Arc::new(Notify::new()),
+            session_secret: Arc::new(b"test-session-secret".to_vec()),
+            users: Arc::new(Mutex::new(vec![])),
+            registration_open: false,
+        }
+    }
+
+    #[tokio::test]
+    async fn progressive_get_retries_stale_cached_direct_url_in_same_request() {
+        let _env_guard = YTDLP_ENV_LOCK.lock().unwrap();
+        let stale_hits = Arc::new(AtomicUsize::new(0));
+        let fresh_hits = Arc::new(AtomicUsize::new(0));
+        let app = Router::new()
+            .route(
+                "/stale",
+                get({
+                    let hits = stale_hits.clone();
+                    move || async move {
+                        hits.fetch_add(1, Ordering::SeqCst);
+                        StatusCode::FORBIDDEN
+                    }
+                }),
+            )
+            .route(
+                "/fresh",
+                get({
+                    let hits = fresh_hits.clone();
+                    move || async move {
+                        hits.fetch_add(1, Ordering::SeqCst);
+                        Response::builder()
+                            .status(StatusCode::PARTIAL_CONTENT)
+                            .header(header::CONTENT_TYPE, "audio/mp4")
+                            .header(header::CONTENT_LENGTH, "11")
+                            .header(header::CONTENT_RANGE, "bytes 0-10/11")
+                            .body(Body::from("fresh-audio"))
+                            .unwrap()
+                    }
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let fake_ytdlp =
+            std::env::temp_dir().join(format!("bkgrnd-fake-ytdlp-{}-{unique}", std::process::id()));
+        std::fs::write(
+            &fake_ytdlp,
+            format!("#!/bin/sh\nprintf '%s\\n' 'http://{address}/fresh'\n"),
+        )
+        .unwrap();
+        std::fs::set_permissions(&fake_ytdlp, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let previous_ytdlp = std::env::var_os("WOPR_YTDLP_BIN");
+        std::env::set_var("WOPR_YTDLP_BIN", &fake_ytdlp);
+
+        let state = test_state(reqwest::Client::new());
+        let source_url = "https://www.youtube.com/watch?v=test-source";
+        state.stream_cache.lock().await.insert(
+            source_url.to_string(),
+            CachedStreamUrl {
+                url: format!("http://{address}/stale"),
+                expires_at: Instant::now() + Duration::from_secs(60),
+            },
+        );
+        let mut headers = HeaderMap::new();
+        headers.insert(header::RANGE, HeaderValue::from_static("bytes=0-"));
+        let response = stream_audio(
+            State(state.clone()),
+            headers,
+            Query(StreamQuery {
+                url: source_url.to_string(),
+                token: None,
+                proxy: Some(true),
+                castsig: None,
+            }),
+        )
+        .await
+        .into_response();
+        let status = response.status();
+        let body = to_bytes(response.into_body(), 1024).await.unwrap();
+
+        match previous_ytdlp {
+            Some(value) => std::env::set_var("WOPR_YTDLP_BIN", value),
+            None => std::env::remove_var("WOPR_YTDLP_BIN"),
+        }
+        std::fs::remove_file(&fake_ytdlp).unwrap();
+
+        assert_eq!(status, StatusCode::PARTIAL_CONTENT);
+        assert_eq!(&body[..], b"fresh-audio");
+        assert_eq!(stale_hits.load(Ordering::SeqCst), 1);
+        assert_eq!(fresh_hits.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            state.stream_cache.lock().await.get(source_url).unwrap().url,
+            format!("http://{address}/fresh")
+        );
+    }
 
     #[test]
     fn parses_range_headers() {
         assert_eq!(parse_range_start_end(None), (0, None));
         assert_eq!(parse_range_start_end(Some("bytes=0-")), (0, None));
-        assert_eq!(parse_range_start_end(Some("bytes=100-200")), (100, Some(200)));
+        assert_eq!(
+            parse_range_start_end(Some("bytes=100-200")),
+            (100, Some(200))
+        );
         assert_eq!(parse_range_start_end(Some("bytes=100-")), (100, None));
         // Suffix and malformed ranges fall back to the start of the file.
         assert_eq!(parse_range_start_end(Some("bytes=-500")), (0, None));
@@ -2236,7 +2482,10 @@ mod tests {
             extract_youtube_id("https://www.youtube.com/shorts/dQw4w9WgXcQ"),
             Some("dQw4w9WgXcQ".to_string())
         );
-        assert_eq!(extract_youtube_id("https://example.com/watch?v=dQw4w9WgXcQ"), None);
+        assert_eq!(
+            extract_youtube_id("https://example.com/watch?v=dQw4w9WgXcQ"),
+            None
+        );
         assert_eq!(extract_youtube_id("not a url"), None);
     }
 
@@ -2244,7 +2493,10 @@ mod tests {
     fn classifies_ytdlp_errors() {
         let terminal = classify_ytdlp_error("ERROR: Private video. Sign in.");
         assert!(terminal.terminal);
-        assert_eq!(terminal.user_message, "This video is private and cannot be played.");
+        assert_eq!(
+            terminal.user_message,
+            "This video is private and cannot be played."
+        );
 
         let transient = classify_ytdlp_error("ERROR: HTTP Error 429: Too Many Requests");
         assert!(!transient.terminal);
@@ -2295,7 +2547,8 @@ mod tests {
 
     #[test]
     fn rewrites_hls_segments_through_relay() {
-        let manifest = "#EXTM3U\n#EXTINF:5,\nhttps://rr9---sn.googlevideo.com/videoplayback/file/seg.ts";
+        let manifest =
+            "#EXTM3U\n#EXTINF:5,\nhttps://rr9---sn.googlevideo.com/videoplayback/file/seg.ts";
         let rewritten = rewrite_hls_manifest(manifest, Some("secret"));
         assert!(rewritten.contains("/api/v1/stream-segment?url="));
         assert!(rewritten.contains("token=secret"));
@@ -2334,7 +2587,10 @@ mod tests {
         assert!(auth_ok(&headers, &token, Some("secret")));
         assert!(!auth_ok(&headers, &token, Some("wrong")));
 
-        headers.insert(header::AUTHORIZATION, HeaderValue::from_static("Bearer secret"));
+        headers.insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer secret"),
+        );
         assert!(auth_ok(&headers, &token, None));
 
         // No configured token -> open.
