@@ -82,6 +82,7 @@ final class AppModel: ObservableObject {
       self.pendingNextIndex = nil
       guard self.queue.indices.contains(next) else { return }
       self.queueIndex = next
+      self.recoveryPolicy.reset()
       let item = self.queue[next]
       self.nowPlaying = item
       self.recordAppPlay(item.url)
@@ -92,17 +93,10 @@ final class AppModel: ObservableObject {
       Task { await self?.advanceQueue(by: forward ? 1 : -1) }
     }
     audioPlayer.onPlaybackError = { [weak self] message in
-      guard let self else { return }
-      self.statusMessage = message
-      // One recovery attempt with a fresh resolve (pre-enqueued stream URLs
-      // can rot if a track sat in the queue for hours).
-      if self.queue.indices.contains(self.queueIndex) {
-        let item = self.queue[self.queueIndex]
-        if self.lastRecoveryURL != item.url {
-          self.lastRecoveryURL = item.url
-          Task { await self.startPlayback(item) }
-        }
-      }
+      self?.recoverPlayback(after: message)
+    }
+    audioPlayer.onPlaybackStalled = { [weak self] message in
+      self?.recoverPlayback(after: message)
     }
   }
 
@@ -196,6 +190,7 @@ final class AppModel: ObservableObject {
       return
     }
     playGeneration += 1
+    recoveryPolicy.reset()
     queue = [item]
     queueIndex = 0
     queueTitle = ""
@@ -209,6 +204,7 @@ final class AppModel: ObservableObject {
   /// track so audio starts in seconds, swap in the full queue when it lands.
   private func playSpotify(_ item: PlaylistItem) async {
     playGeneration += 1
+    recoveryPolicy.reset()
     let generation = playGeneration
     statusMessage = "converting"
     nowPlaying = item
@@ -288,7 +284,7 @@ final class AppModel: ObservableObject {
   /// Pre-resolve and pre-enqueue the next queue track so AVQueuePlayer can
   /// cross the track boundary with no app-side work (the app gets suspended
   /// if it needs the network right when the session goes silent).
-  private var lastRecoveryURL: String?
+  private var recoveryPolicy = PlaybackRecoveryPolicy()
   /// The index the pre-enqueued item corresponds to (shuffle picks ahead).
   private var pendingNextIndex: Int?
 
@@ -353,11 +349,33 @@ final class AppModel: ObservableObject {
       return
     }
     queueIndex = target
+    recoveryPolicy.reset()
     await startPlayback(queue[target])
+  }
+
+  /// A player item can remain waiting forever without transitioning to
+  /// AVPlayerItem.Status.failed. Give each user-initiated item one automatic
+  /// recovery: evict the relay's cached direct URL, resolve again, and replace
+  /// the AVPlayerItem. A second failure is surfaced instead of retry-looping.
+  private func recoverPlayback(after message: String) {
+    statusMessage = message
+    guard queue.indices.contains(queueIndex) else { return }
+    let item = queue[queueIndex]
+    guard recoveryPolicy.claimRetry(for: item.url) else { return }
+    let generation = playGeneration
+    statusMessage = "retrying"
+
+    Task {
+      guard let sourceURL = URL(string: item.url) else { return }
+      _ = await client.refreshStream(sourceURL: sourceURL)
+      guard generation == playGeneration, nowPlaying?.url == item.url else { return }
+      await startPlayback(item)
+    }
   }
 
   func stopLocal() {
     playGeneration += 1
+    recoveryPolicy.reset()
     audioPlayer.stop()
     nowPlaying = nil
     queue = []

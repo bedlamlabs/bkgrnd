@@ -23,12 +23,17 @@ final class AudioPlayer: ObservableObject {
   var onSkipRequested: ((_ forward: Bool) -> Void)?
   /// Fires with a human-readable message when the player item fails.
   var onPlaybackError: ((String) -> Void)?
+  /// Fires once when an intended playback item makes no progress for 15s.
+  var onPlaybackStalled: ((String) -> Void)?
 
   private let log = Logger(subsystem: "com.bedlamlabs.bkgrnd.ios", category: "player")
   private let player = AVQueuePlayer()
   private var timeObserver: Any?
   private var currentItemCancellable: AnyCancellable?
-  private var statusCancellable: AnyCancellable?
+  private var itemCancellables = Set<AnyCancellable>()
+  private var timeControlCancellable: AnyCancellable?
+  private var watchdogTask: Task<Void, Never>?
+  private var stallDetector = PlaybackStallDetector()
   private var commandsConfigured = false
   private var suppressItemCallbacks = false
   private var enqueuedNextItem: AVPlayerItem?
@@ -100,9 +105,20 @@ final class AudioPlayer: ObservableObject {
         }
       }
     }
+
+    timeControlCancellable = player.publisher(for: \.timeControlStatus).sink { [weak self] status in
+      Task { @MainActor in
+        guard let self else { return }
+        let waiting = self.player.reasonForWaitingToPlay?.rawValue ?? "none"
+        self.log.info(
+          "timeControl=\(Self.timeControlName(status), privacy: .public) waiting=\(waiting, privacy: .public) position=\(self.safeCurrentTime, privacy: .public)"
+        )
+      }
+    }
   }
 
   deinit {
+    watchdogTask?.cancel()
     if let interruptionObserver {
       NotificationCenter.default.removeObserver(interruptionObserver)
     }
@@ -120,6 +136,7 @@ final class AudioPlayer: ObservableObject {
   func play(url: URL, headers: [String: String], title: String, artist: String, artworkURL: String?) async {
     configureAudioSession()
 
+    watchdogTask?.cancel()
     suppressItemCallbacks = true
     player.removeAllItems()
     enqueuedNextItem = nil
@@ -135,6 +152,7 @@ final class AudioPlayer: ObservableObject {
 
     player.play()
     isPlaying = true
+    startWatchdog(for: item)
     pushNowPlayingInfo()
   }
 
@@ -162,12 +180,14 @@ final class AudioPlayer: ObservableObject {
   }
 
   func stop() {
+    watchdogTask?.cancel()
+    watchdogTask = nil
     suppressItemCallbacks = true
     player.pause()
     player.removeAllItems()
     enqueuedNextItem = nil
     suppressItemCallbacks = false
-    statusCancellable = nil
+    itemCancellables.removeAll()
     isPlaying = false
     currentTime = 0
     duration = 0
@@ -182,6 +202,7 @@ final class AudioPlayer: ObservableObject {
     } else {
       player.play()
       isPlaying = true
+      stallDetector.reset(position: safeCurrentTime)
     }
     pushNowPlayingInfo()
   }
@@ -190,6 +211,7 @@ final class AudioPlayer: ObservableObject {
     guard player.currentItem != nil else { return }
     player.seek(to: CMTime(seconds: max(seconds, 0), preferredTimescale: 600))
     currentTime = max(seconds, 0)
+    stallDetector.reset(position: max(seconds, 0))
     pushNowPlayingInfo()
   }
 
@@ -198,21 +220,13 @@ final class AudioPlayer: ObservableObject {
   }
 
   private func observeStatus(of item: AVPlayerItem) {
-    statusCancellable = item.publisher(for: \.status).sink { [weak self, weak item] status in
+    itemCancellables.removeAll()
+    item.publisher(for: \.status).sink { [weak self, weak item] status in
       Task { @MainActor in
         guard let self else { return }
         switch status {
         case .failed:
-          let error = item?.error
-          let detail = error.map(String.init(describing:)) ?? "unknown"
-          self.log.error("player item failed: \(detail, privacy: .public)")
-          if let events = item?.errorLog()?.events {
-            for e in events {
-              self.log.error("errorLog: status=\(e.errorStatusCode) domain=\(e.errorDomain, privacy: .public) comment=\(e.errorComment ?? "", privacy: .public)")
-            }
-          }
-          self.isPlaying = false
-          self.onPlaybackError?((error as NSError?)?.localizedDescription ?? "playback failed")
+          self.reportFailure(item: item, fallback: "playback failed")
         case .readyToPlay:
           self.log.info("player item ready")
           // With automaticallyWaitsToMinimizeStalling = false, a play() issued
@@ -226,6 +240,128 @@ final class AudioPlayer: ObservableObject {
           break
         }
       }
+    }.store(in: &itemCancellables)
+
+    NotificationCenter.default.publisher(for: .AVPlayerItemPlaybackStalled, object: item)
+      .sink { [weak self, weak item] _ in
+        Task { @MainActor in
+          guard let self, let item else { return }
+          self.log.warning("AVPlayerItemPlaybackStalled notification")
+          self.logDiagnostics(item: item, reason: "playback-stalled-notification")
+        }
+      }
+      .store(in: &itemCancellables)
+
+    NotificationCenter.default.publisher(for: .AVPlayerItemFailedToPlayToEndTime, object: item)
+      .sink { [weak self, weak item] note in
+        Task { @MainActor in
+          guard let self else { return }
+          let error = note.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? Error
+          self.reportFailure(item: item, error: error, fallback: "playback ended unexpectedly")
+        }
+      }
+      .store(in: &itemCancellables)
+
+    NotificationCenter.default.publisher(for: .AVPlayerItemNewErrorLogEntry, object: item)
+      .sink { [weak self, weak item] _ in
+        Task { @MainActor in
+          guard let self, let item, let event = item.errorLog()?.events.last else { return }
+          self.log.error(
+            "errorLog status=\(event.errorStatusCode) domain=\(event.errorDomain, privacy: .public) comment=\(event.errorComment ?? "", privacy: .public)"
+          )
+        }
+      }
+      .store(in: &itemCancellables)
+  }
+
+  private func startWatchdog(for item: AVPlayerItem) {
+    watchdogTask?.cancel()
+    stallDetector.reset(position: safeCurrentTime)
+    watchdogTask = Task { [weak self, weak item] in
+      while !Task.isCancelled {
+        do {
+          try await Task.sleep(for: .seconds(2))
+        } catch {
+          return
+        }
+        guard let self, let item, self.player.currentItem === item else { return }
+        let position = self.safeCurrentTime
+        guard self.stallDetector.evaluate(position: position, intendsToPlay: self.isPlaying) else {
+          continue
+        }
+
+        self.log.error("playback watchdog: no progress for 15 seconds")
+        self.logDiagnostics(item: item, reason: "no-progress-timeout")
+        self.player.pause()
+        self.isPlaying = false
+        self.pushNowPlayingInfo()
+        let message = position < 1 ? "Stream did not start." : "Playback stalled."
+        self.onPlaybackStalled?(message)
+        return
+      }
+    }
+  }
+
+  private var safeCurrentTime: Double {
+    let seconds = player.currentTime().seconds
+    return seconds.isFinite ? max(seconds, 0) : 0
+  }
+
+  private func reportFailure(
+    item: AVPlayerItem?,
+    error explicitError: Error? = nil,
+    fallback: String
+  ) {
+    let error = explicitError ?? item?.error
+    let detail = error.map(String.init(describing:)) ?? fallback
+    log.error("player item failed: \(detail, privacy: .public)")
+    if let item { logDiagnostics(item: item, reason: "item-failed") }
+    isPlaying = false
+    onPlaybackError?((error as NSError?)?.localizedDescription ?? fallback)
+  }
+
+  private func logDiagnostics(item: AVPlayerItem, reason: String) {
+    let waiting = player.reasonForWaitingToPlay?.rawValue ?? "none"
+    let loaded = Self.describeRanges(item.loadedTimeRanges)
+    let seekable = Self.describeRanges(item.seekableTimeRanges)
+    let itemError = item.error.map(String.init(describing:)) ?? "none"
+    log.error(
+      "diagnostic reason=\(reason, privacy: .public) item=\(Self.itemStatusName(item.status), privacy: .public) timeControl=\(Self.timeControlName(self.player.timeControlStatus), privacy: .public) waiting=\(waiting, privacy: .public) position=\(self.safeCurrentTime, privacy: .public) duration=\(item.duration.seconds, privacy: .public) empty=\(item.isPlaybackBufferEmpty) full=\(item.isPlaybackBufferFull) keepUp=\(item.isPlaybackLikelyToKeepUp) loaded=\(loaded, privacy: .public) seekable=\(seekable, privacy: .public) error=\(itemError, privacy: .public)"
+    )
+    if let event = item.accessLog()?.events.last {
+      log.error(
+        "accessLog requests=\(event.numberOfMediaRequests) bytes=\(event.numberOfBytesTransferred) transfer=\(event.transferDuration, privacy: .public) observedBitrate=\(event.observedBitrate, privacy: .public) indicatedBitrate=\(event.indicatedBitrate, privacy: .public)"
+      )
+    }
+    if let event = item.errorLog()?.events.last {
+      log.error(
+        "latestError status=\(event.errorStatusCode) domain=\(event.errorDomain, privacy: .public) comment=\(event.errorComment ?? "", privacy: .public)"
+      )
+    }
+  }
+
+  private static func describeRanges(_ values: [NSValue]) -> String {
+    values.map { value in
+      let range = value.timeRangeValue
+      return "\(range.start.seconds)-\(CMTimeAdd(range.start, range.duration).seconds)"
+    }.joined(separator: ",")
+  }
+
+  private static func itemStatusName(_ status: AVPlayerItem.Status) -> String {
+    switch status {
+    case .unknown: return "unknown"
+    case .readyToPlay: return "ready"
+    case .failed: return "failed"
+    @unknown default: return "future"
+    }
+  }
+
+  private static func timeControlName(_ status: AVPlayer.TimeControlStatus) -> String {
+    switch status {
+    case .paused: return "paused"
+    case .waitingToPlayAtSpecifiedRate: return "waiting"
+    case .playing: return "playing"
+    @unknown default: return "future"
     }
   }
 
@@ -238,6 +374,7 @@ final class AudioPlayer: ObservableObject {
     case .began:
       wasPlayingBeforeInterruption = isPlaying
       isPlaying = false
+      stallDetector.reset(position: safeCurrentTime)
       pushNowPlayingInfo()
     case .ended:
       guard wasPlayingBeforeInterruption else { return }
@@ -255,6 +392,7 @@ final class AudioPlayer: ObservableObject {
       try AVAudioSession.sharedInstance().setActive(true)
       player.play()
       isPlaying = true
+      stallDetector.reset(position: safeCurrentTime)
       pushNowPlayingInfo()
     } catch {
       guard retries > 0 else {

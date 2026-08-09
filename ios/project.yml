@@ -44,4 +44,15 @@ targets:
         # enabled 2026-07-08.
         CODE_SIGN_ENTITLEMENTS: bkgrnd/bkgrnd.entitlements
     scheme:
-      testTargets: []
+      testTargets:
+        - bkgrndTests
+  bkgrndTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: bkgrndTests
+    dependencies:
+      - target: bkgrnd
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES

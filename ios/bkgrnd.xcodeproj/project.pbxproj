@@ -11,6 +11,7 @@
 		05C6E917BF902CA1F1DAE594 /* CarPlayController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 322A30F6C04988260C9A7718 /* CarPlayController.swift */; };
 		1320CEAAD83806C925695CB7 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 1E21E559CB9D0BB3A021C914 /* Assets.xcassets */; };
 		2BDA55DEA37E26A6908B2BE5 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDB1E165A9861C1BDC2D757B /* Theme.swift */; };
+		2CF002CF965FA5AB09AC0E8E /* PlaybackStallDetectorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA6A818E98931E465C0A9E82 /* PlaybackStallDetectorTests.swift */; };
 		2DB12FFC1EA6D363F5278547 /* bkgrndApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E4CA0C7C89EFEF137232582 /* bkgrndApp.swift */; };
 		4060ABE8A2A3E74E06D6D8D7 /* CarPlaySceneDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5D45CF5C36D65E35D4A74E47 /* CarPlaySceneDelegate.swift */; };
 		54A5509C444869835AC81725 /* WOPRClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = E181634AFFE0BDA79428306A /* WOPRClient.swift */; };
@@ -22,8 +23,19 @@
 		CD5AC6EE420B56A9B6C260EA /* SearchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F354A9510CB1E1F839F5FD51 /* SearchView.swift */; };
 		D13D59BFD99C231F7CC29FC8 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49A867BED058F62F5B6A36E9 /* RootView.swift */; };
 		D435261FF7D5ACE16E959FE5 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 213F4EB00D3B1FDEC0F23D4E /* Models.swift */; };
+		D97FA48ED61CE841C0022AEE /* PlaybackStallDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 76C90390402C6AF2A860778B /* PlaybackStallDetector.swift */; };
 		E15DDA2125EC9B61C27848A1 /* NowPlayingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B7968C7C2D74921872D89C2 /* NowPlayingView.swift */; };
 /* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		DCBB6BB447034B7D3F891D5E /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = D1F41DA30F75FAD8AF4C5B0D /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 16028699718F72A2E24400C7;
+			remoteInfo = bkgrnd;
+		};
+/* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
 		08599029AD6E501E26C8D279 /* MiniPlayerBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MiniPlayerBar.swift; sourceTree = "<group>"; };
@@ -32,15 +44,18 @@
 		322A30F6C04988260C9A7718 /* CarPlayController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CarPlayController.swift; sourceTree = "<group>"; };
 		3B93AF2D43B9B271D6A50C57 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		49A867BED058F62F5B6A36E9 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
+		56B8430C86CE89FABB2F39C8 /* bkgrndTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = bkgrndTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		5D45CF5C36D65E35D4A74E47 /* CarPlaySceneDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CarPlaySceneDelegate.swift; sourceTree = "<group>"; };
 		69DD390AE26DB811D0E65169 /* bkgrnd.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = bkgrnd.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		6E4CA0C7C89EFEF137232582 /* bkgrndApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = bkgrndApp.swift; sourceTree = "<group>"; };
+		76C90390402C6AF2A860778B /* PlaybackStallDetector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaybackStallDetector.swift; sourceTree = "<group>"; };
 		870AD91F3A3DB9CF89DBE190 /* RecentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecentView.swift; sourceTree = "<group>"; };
 		8B7968C7C2D74921872D89C2 /* NowPlayingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NowPlayingView.swift; sourceTree = "<group>"; };
 		8D735769D72C4487FE5B98E3 /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
 		9E0ED5DE9A3A8E502E34D098 /* KeychainStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainStore.swift; sourceTree = "<group>"; };
 		DDB1E165A9861C1BDC2D757B /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
 		E181634AFFE0BDA79428306A /* WOPRClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WOPRClient.swift; sourceTree = "<group>"; };
+		EA6A818E98931E465C0A9E82 /* PlaybackStallDetectorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaybackStallDetectorTests.swift; sourceTree = "<group>"; };
 		EB12C85B12D6EBA2441255DC /* AudioPlayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioPlayer.swift; sourceTree = "<group>"; };
 		F354A9510CB1E1F839F5FD51 /* SearchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -58,6 +73,7 @@
 				08599029AD6E501E26C8D279 /* MiniPlayerBar.swift */,
 				213F4EB00D3B1FDEC0F23D4E /* Models.swift */,
 				8B7968C7C2D74921872D89C2 /* NowPlayingView.swift */,
+				76C90390402C6AF2A860778B /* PlaybackStallDetector.swift */,
 				870AD91F3A3DB9CF89DBE190 /* RecentView.swift */,
 				49A867BED058F62F5B6A36E9 /* RootView.swift */,
 				F354A9510CB1E1F839F5FD51 /* SearchView.swift */,
@@ -82,6 +98,7 @@
 			isa = PBXGroup;
 			children = (
 				69DD390AE26DB811D0E65169 /* bkgrnd.app */,
+				56B8430C86CE89FABB2F39C8 /* bkgrndTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -89,10 +106,19 @@
 		DD03BB9B2235F9AFEC22A5C4 = {
 			isa = PBXGroup;
 			children = (
+				F126BD19A19DD3D79F81EB9A /* bkgrndTests */,
 				C5846DAF4BD8B4B68D5667A4 /* Resources */,
 				17BCC36E37224973D85FAD96 /* Sources */,
 				CB190D34762339434C6D432A /* Products */,
 			);
+			sourceTree = "<group>";
+		};
+		F126BD19A19DD3D79F81EB9A /* bkgrndTests */ = {
+			isa = PBXGroup;
+			children = (
+				EA6A818E98931E465C0A9E82 /* PlaybackStallDetectorTests.swift */,
+			);
+			path = bkgrndTests;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -115,6 +141,24 @@
 			productName = bkgrnd;
 			productReference = 69DD390AE26DB811D0E65169 /* bkgrnd.app */;
 			productType = "com.apple.product-type.application";
+		};
+		197D256F0CFB46A55F2D1D6D /* bkgrndTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 4F83FFBFD11AE62B99F8F2E7 /* Build configuration list for PBXNativeTarget "bkgrndTests" */;
+			buildPhases = (
+				B1CD6F7F4B78217BC39912F9 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				3A3D961CE083A96F490C0030 /* PBXTargetDependency */,
+			);
+			name = bkgrndTests;
+			packageProductDependencies = (
+			);
+			productName = bkgrndTests;
+			productReference = 56B8430C86CE89FABB2F39C8 /* bkgrndTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
 		};
 /* End PBXNativeTarget section */
 
@@ -146,6 +190,7 @@
 			projectRoot = "";
 			targets = (
 				16028699718F72A2E24400C7 /* bkgrnd */,
+				197D256F0CFB46A55F2D1D6D /* bkgrndTests */,
 			);
 		};
 /* End PBXProject section */
@@ -162,6 +207,14 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		B1CD6F7F4B78217BC39912F9 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				2CF002CF965FA5AB09AC0E8E /* PlaybackStallDetectorTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		CF3BB48DBB0545B54DFD6104 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -174,6 +227,7 @@
 				80BB2724EDD8ACBBF5D8A0CC /* MiniPlayerBar.swift in Sources */,
 				D435261FF7D5ACE16E959FE5 /* Models.swift in Sources */,
 				E15DDA2125EC9B61C27848A1 /* NowPlayingView.swift in Sources */,
+				D97FA48ED61CE841C0022AEE /* PlaybackStallDetector.swift in Sources */,
 				02A7FD741F9CABF4F5825A1C /* RecentView.swift in Sources */,
 				D13D59BFD99C231F7CC29FC8 /* RootView.swift in Sources */,
 				CD5AC6EE420B56A9B6C260EA /* SearchView.swift in Sources */,
@@ -185,6 +239,14 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		3A3D961CE083A96F490C0030 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 16028699718F72A2E24400C7 /* bkgrnd */;
+			targetProxy = DCBB6BB447034B7D3F891D5E /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		39E3AA0E13ABED8554983287 /* Release */ = {
@@ -292,6 +354,40 @@
 			};
 			name = Debug;
 		};
+		C226DFFA50E7088B5134C490 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.bedlamlabs.bkgrndTests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/bkgrnd.app/bkgrnd";
+			};
+			name = Release;
+		};
+		E4207F92CC2DF4DC1B30B788 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.bedlamlabs.bkgrndTests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/bkgrnd.app/bkgrnd";
+			};
+			name = Debug;
+		};
 		E4944B450ED0E34F70BC7713 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -356,6 +452,15 @@
 			buildConfigurations = (
 				B0FEF8C57A47E44982CF0AE1 /* Debug */,
 				39E3AA0E13ABED8554983287 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		4F83FFBFD11AE62B99F8F2E7 /* Build configuration list for PBXNativeTarget "bkgrndTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				E4207F92CC2DF4DC1B30B788 /* Debug */,
+				C226DFFA50E7088B5134C490 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;

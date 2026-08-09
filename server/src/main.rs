@@ -830,6 +830,7 @@ struct StreamSegmentQuery {
 struct ResolveQuery {
     url: String,
     token: Option<String>,
+    refresh: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]
@@ -926,6 +927,11 @@ async fn prewarm_stream(
 ) -> impl IntoResponse {
     if !state.authorized(&headers, q.token.as_deref()) {
         return StatusCode::UNAUTHORIZED.into_response();
+    }
+
+    if q.refresh == Some(true) {
+        clear_stream_resolution_cache(&state, &q.url).await;
+        info!("refreshing stream resolution after client playback stall");
     }
 
     let cached = {
@@ -1521,6 +1527,11 @@ fn parse_content_range_total(value: &str) -> Option<u64> {
 
 async fn evict_stream_cache(state: &AppState, url: &str) {
     state.stream_cache.lock().await.remove(url);
+}
+
+async fn clear_stream_resolution_cache(state: &AppState, url: &str) {
+    state.stream_cache.lock().await.remove(url);
+    state.stream_failures.lock().await.remove(url);
 }
 
 #[derive(Debug)]
@@ -2356,6 +2367,32 @@ mod tests {
             users: Arc::new(Mutex::new(vec![])),
             registration_open: false,
         }
+    }
+
+    #[tokio::test]
+    async fn refresh_clears_success_and_failure_resolution_caches() {
+        let state = test_state(reqwest::Client::new());
+        let source_url = "https://www.youtube.com/watch?v=refresh-test";
+        state.stream_cache.lock().await.insert(
+            source_url.to_string(),
+            CachedStreamUrl {
+                url: "https://example.com/stale".to_string(),
+                expires_at: Instant::now() + Duration::from_secs(60),
+            },
+        );
+        state.stream_failures.lock().await.insert(
+            source_url.to_string(),
+            CachedStreamFailure {
+                user_message: "stale failure".to_string(),
+                technical_message: "stale failure".to_string(),
+                expires_at: Instant::now() + Duration::from_secs(60),
+            },
+        );
+
+        clear_stream_resolution_cache(&state, source_url).await;
+
+        assert!(!state.stream_cache.lock().await.contains_key(source_url));
+        assert!(!state.stream_failures.lock().await.contains_key(source_url));
     }
 
     #[tokio::test]

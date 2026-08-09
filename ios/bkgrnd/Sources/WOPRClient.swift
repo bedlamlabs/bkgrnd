@@ -67,6 +67,26 @@ actor WOPRClient {
     _ = try? await URLSession.shared.data(for: req)
   }
 
+  /// Drop any cached direct media URL on the relay and resolve a new one before
+  /// rebuilding AVPlayer. Used once after a detected no-progress stall.
+  func refreshStream(sourceURL: URL) async -> Bool {
+    var comps = URLComponents(url: config.baseURL.appendingPathComponent("/api/v1/prewarm"), resolvingAgainstBaseURL: false)!
+    comps.queryItems = [
+      URLQueryItem(name: "url", value: sourceURL.absoluteString),
+      URLQueryItem(name: "refresh", value: "true"),
+    ]
+    var req = URLRequest(url: comps.url!)
+    req.httpMethod = "GET"
+    addAuth(&req)
+    do {
+      let (_, response) = try await URLSession.shared.data(for: req)
+      guard let status = (response as? HTTPURLResponse)?.statusCode else { return false }
+      return (200..<300).contains(status)
+    } catch {
+      return false
+    }
+  }
+
   func streamHeaders() -> [String: String] {
     guard let token = config.bearerToken, !token.isEmpty else { return [:] }
     return ["Authorization": "Bearer \(token)"]
