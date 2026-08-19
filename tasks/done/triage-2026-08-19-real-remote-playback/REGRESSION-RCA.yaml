@@ -46,7 +46,7 @@ fix_applied:
 prevention:
   control_type: tests_and_production_matrix
   control_ref: >
-    tasks/dev-complete/triage-2026-08-19-real-remote-playback/tests/real-remote-playback.test.sh;
+    tasks/done/triage-2026-08-19-real-remote-playback/tests/real-remote-playback.test.sh;
     scripts/verify-remote-playback-matrix.sh
   action: >
     Unit coverage freezes readiness and session-ownership rules. The muted

@@ -1,9 +1,9 @@
 {
   "version": "1.0",
   "triage_date": "2026-08-19T20:20:00Z",
-  "task_dir": "tasks/dev-complete/triage-2026-08-19-real-remote-playback",
+  "task_dir": "tasks/done/triage-2026-08-19-real-remote-playback",
   "triage_qa_verdict": "PASS",
-  "triage_qa_evidence": "tasks/dev-complete/triage-2026-08-19-real-remote-playback/evidence/helga-verdict.json",
+  "triage_qa_evidence": "tasks/done/triage-2026-08-19-real-remote-playback/evidence/helga-verdict.json",
   "intake": {
     "approved": true,
     "approved_at": "2026-08-19T19:20:00Z",
@@ -17,7 +17,7 @@
       "status": "closed",
       "reproduction": {
         "command": "BKGRND_ALLOW_DISRUPTIVE_PLAYBACK_TEST=1 bash scripts/verify-remote-playback-matrix.sh --startup",
-        "output_artifact": "tasks/dev-complete/triage-2026-08-19-real-remote-playback/evidence/red-tdd-RED-1.log",
+        "output_artifact": "tasks/done/triage-2026-08-19-real-remote-playback/evidence/red-tdd-RED-1.log",
         "expected": "A non-live history item advances through the remote queue and falls through when the first resolver session is unusable.",
         "actual": "The remote API reported playing after MPV created an IPC socket, while position remained at zero and the media URL returned HTTP 403."
       },
@@ -34,14 +34,14 @@
           "src-tauri/src/mpv.rs",
           "scripts/verify-remote-playback-matrix.sh"
         ],
-        "test_file": "tasks/dev-complete/triage-2026-08-19-real-remote-playback/tests/real-remote-playback.test.sh",
+        "test_file": "tasks/done/triage-2026-08-19-real-remote-playback/tests/real-remote-playback.test.sh",
         "description": "Honor YouTube's bounded stream-availability timestamp, require a real non-idle MPV position before startup succeeds, and fall through the resolver chain when readiness fails."
       },
       "verification": {
-        "red_evidence": "tasks/dev-complete/triage-2026-08-19-real-remote-playback/evidence/red-tdd.json",
-        "green_evidence": "tasks/dev-complete/triage-2026-08-19-real-remote-playback/evidence/production-verification.json",
+        "red_evidence": "tasks/done/triage-2026-08-19-real-remote-playback/evidence/red-tdd.json",
+        "green_evidence": "tasks/done/triage-2026-08-19-real-remote-playback/evidence/production-verification.json",
         "regression_clean": true,
-        "regression_evidence": "tasks/dev-complete/triage-2026-08-19-real-remote-playback/evidence/localhost-verification.json"
+        "regression_evidence": "tasks/done/triage-2026-08-19-real-remote-playback/evidence/localhost-verification.json"
       },
       "regression_provenance": {
         "artifact_type": "other",
@@ -54,7 +54,7 @@
         "prevention_control_type": "test",
         "prevention_control_ref": "scripts/verify-remote-playback-matrix.sh --startup",
         "prevention_verified": true,
-        "prevention_verification_evidence": "tasks/dev-complete/triage-2026-08-19-real-remote-playback/evidence/production-verification.json"
+        "prevention_verification_evidence": "tasks/done/triage-2026-08-19-real-remote-playback/evidence/production-verification.json"
       }
     },
     {
@@ -64,7 +64,7 @@
       "status": "closed",
       "reproduction": {
         "command": "BKGRND_ALLOW_DISRUPTIVE_PLAYBACK_TEST=1 bash scripts/verify-remote-playback-matrix.sh --soak-seconds 95",
-        "output_artifact": "tasks/dev-complete/triage-2026-08-19-real-remote-playback/evidence/red-tdd-RED-1.log",
+        "output_artifact": "tasks/done/triage-2026-08-19-real-remote-playback/evidence/red-tdd-RED-1.log",
         "expected": "A stalled or abnormally exited ordinary video resumes through the next usable resolver.",
         "actual": "Recovery watchers and abnormal-exit fallback were restricted to sessions marked live, so non-live playback stopped without recovery."
       },
@@ -79,14 +79,14 @@
           "src-tauri/src/player.rs",
           "scripts/verify-remote-playback-matrix.sh"
         ],
-        "test_file": "tasks/dev-complete/triage-2026-08-19-real-remote-playback/tests/real-remote-playback.test.sh",
+        "test_file": "tasks/done/triage-2026-08-19-real-remote-playback/tests/real-remote-playback.test.sh",
         "description": "Attach guarded stall and abnormal-exit recovery to every YouTube session while retaining pause, shuffle, clean-exit, and generation ownership protections."
       },
       "verification": {
-        "red_evidence": "tasks/dev-complete/triage-2026-08-19-real-remote-playback/evidence/red-tdd.json",
-        "green_evidence": "tasks/dev-complete/triage-2026-08-19-real-remote-playback/evidence/production-verification.json",
+        "red_evidence": "tasks/done/triage-2026-08-19-real-remote-playback/evidence/red-tdd.json",
+        "green_evidence": "tasks/done/triage-2026-08-19-real-remote-playback/evidence/production-verification.json",
         "regression_clean": true,
-        "regression_evidence": "tasks/dev-complete/triage-2026-08-19-real-remote-playback/evidence/localhost-verification.json"
+        "regression_evidence": "tasks/done/triage-2026-08-19-real-remote-playback/evidence/localhost-verification.json"
       },
       "regression_provenance": {
         "artifact_type": "git_commit",
@@ -99,7 +99,7 @@
         "prevention_control_type": "test",
         "prevention_control_ref": "scripts/verify-remote-playback-matrix.sh --soak-seconds 95",
         "prevention_verified": true,
-        "prevention_verification_evidence": "tasks/dev-complete/triage-2026-08-19-real-remote-playback/evidence/production-verification.json"
+        "prevention_verification_evidence": "tasks/done/triage-2026-08-19-real-remote-playback/evidence/production-verification.json"
       }
     }
   ],
