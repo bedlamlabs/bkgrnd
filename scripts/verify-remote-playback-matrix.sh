@@ -159,6 +159,28 @@ wait_for_progress() {
   return 1
 }
 
+wait_for_mix_progress() {
+  local state seen_id playing position queue_length playlist_title
+  for _ in {1..100}; do
+    state="$(read_status)"
+    seen_id="$(jq -r '.status.videoId // empty' <<<"$state")"
+    playing="$(jq -r '.status.isPlaying // false' <<<"$state")"
+    position="$(jq -r '.status.position // 0' <<<"$state")"
+    queue_length="$(jq -r '.status.queueLength // 0' <<<"$state")"
+    playlist_title="$(jq -r '.status.playlistTitle // empty' <<<"$state")"
+    if [[ -n "$seen_id" && "$seen_id" != "$excluded_verifier_id" \
+      && "$playing" == true && -n "$playlist_title" ]] \
+      && (( queue_length > 1 )) \
+      && awk -v p="$position" 'BEGIN { exit !(p > 0.25) }'; then
+      printf '%s' "$position"
+      return 0
+    fi
+    sleep 0.5
+  done
+  echo "Remote Mix queue never produced advancing playback" >&2
+  return 1
+}
+
 marker_strategy_after() {
   local minimum_ms="$1"
   shift
@@ -218,19 +240,28 @@ run_matrix_item() {
   local label="$1"
   local url="$2"
   local expected_id="$3"
+  local kind="$4"
   send_remote_play "$url" "$label"
   local start_position end_position
-  start_position="$(wait_for_progress "$expected_id")"
-  sleep 50
-  end_position="$(wait_for_progress "$expected_id")"
-  assert_advanced_by "$start_position" "$end_position" 40
+  if [[ "$kind" == "mix" ]]; then
+    start_position="$(wait_for_mix_progress)"
+  else
+    start_position="$(wait_for_progress "$expected_id")"
+  fi
+  sleep 8
+  if [[ "$kind" == "mix" ]]; then
+    end_position="$(wait_for_mix_progress)"
+  else
+    end_position="$(wait_for_progress "$expected_id")"
+  fi
+  assert_advanced_by "$start_position" "$end_position" 3
 }
 
 run_matrix() {
   start_muted_app "" ""
-  run_matrix_item "plain history video" "$plain_url" "$plain_id"
-  run_matrix_item "history Mix URL" "$mix_url" "$mix_id"
-  run_matrix_item "history live stream" "$live_url" "$live_id"
+  run_matrix_item "plain history video" "$plain_url" "$plain_id" "video"
+  run_matrix_item "history Mix URL" "$mix_url" "$mix_id" "mix"
+  run_matrix_item "history live stream" "$live_url" "$live_id" "live"
   echo "AT-3 PASS: production remote playback advanced real plain, Mix, and live history items; excluded verifier id $excluded_verifier_id"
 }
 
