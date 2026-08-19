@@ -21,10 +21,11 @@ jobs:
       - name: Install stable Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Prepare test-only Tauri sidecar
+      - name: Prepare test-only Tauri resources
         run: |
-          mkdir -p src-tauri/binaries
+          mkdir -p src-tauri/binaries/mpv-bundle
           install -m 755 /usr/bin/true src-tauri/binaries/yt-dlp-aarch64-apple-darwin
+          : > src-tauri/binaries/mpv-bundle/ci-placeholder
 
       - name: Run Tauri Rust tests
         run: cargo test --manifest-path src-tauri/Cargo.toml
