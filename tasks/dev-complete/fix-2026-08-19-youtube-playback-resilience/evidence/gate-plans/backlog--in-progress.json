@@ -1,0 +1,25 @@
+{
+  "version": "1.0",
+  "transition": "backlog->in-progress",
+  "task_path": "/Users/geoffmccaleb/bkgrnd/tasks/backlog/fix-2026-08-19-youtube-playback-resilience",
+  "workflow_mode": "turbo",
+  "bypass_questions": "forbidden",
+  "prerequisites": [
+    {
+      "predicate": "baseline_hashes_current",
+      "owner": "scripts/hash-baselines.sh",
+      "command": "bash ~/.hosaka/scripts/hash-baselines.sh \"/Users/geoffmccaleb/bkgrnd/tasks/backlog/fix-2026-08-19-youtube-playback-resilience\""
+    },
+    {
+      "predicate": "red_tdd_valid",
+      "owner": "scripts/run-red-tdd.sh",
+      "command": "bash ~/.hosaka/scripts/run-red-tdd.sh \"/Users/geoffmccaleb/bkgrnd/tasks/backlog/fix-2026-08-19-youtube-playback-resilience\""
+    },
+    {
+      "predicate": "requirements_contract_approved",
+      "owner": "scripts/contract-approve.sh",
+      "command": "bash ~/.hosaka/scripts/contract-approve.sh \"/Users/geoffmccaleb/bkgrnd/tasks/backlog/fix-2026-08-19-youtube-playback-resilience\""
+    }
+  ],
+  "generated_by": "hosaka-gate-plan.sh"
+}

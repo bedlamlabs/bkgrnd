@@ -60,6 +60,12 @@ fn ytdlp_command(args: &[&str]) -> Command {
     cmd
 }
 
+fn ytdlp_command_owned(args: &[String]) -> Command {
+    let mut cmd = Command::new(ytdlp_binary());
+    cmd.args(args);
+    cmd
+}
+
 pub fn extract_video_id(url_str: &str) -> String {
     if let Ok(parsed) = url::Url::parse(url_str) {
         let host = parsed.host_str().unwrap_or("");
@@ -122,10 +128,82 @@ pub fn is_playlist_url(url_str: &str) -> bool {
     false
 }
 
-// Pinning a single fast client avoids yt-dlp querying several clients (the
-// default), which is markedly faster per resolve — especially over a high
-// latency path. We fall back to default extraction if the fast client fails.
+// The legacy resolver still pins a single fast client before trying yt-dlp's
+// default client set. It is deliberately last: current YouTube GVS sessions
+// can resolve successfully and then lose authorization for later live HLS
+// segments.
 const FAST_PLAYER_CLIENT: &str = "youtube:player_client=android_vr";
+const POT_PLAYER_CLIENT: &str = "youtube:player_client=mweb";
+const EMBEDDED_PLAYER_CLIENT: &str = "youtube:player_client=web_embedded";
+const POT_PROVIDER_ARGS: &str = "youtubepot-bgutilhttp:base_url=http://127.0.0.1:4416";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResolverStrategy {
+    PotProvider,
+    WebEmbedded,
+    Legacy,
+}
+
+impl ResolverStrategy {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::PotProvider => "pot-provider",
+            Self::WebEmbedded => "web-embedded",
+            Self::Legacy => "legacy",
+        }
+    }
+
+    pub fn next(self) -> Option<Self> {
+        let order = resolver_strategy_order();
+        order
+            .iter()
+            .position(|candidate| *candidate == self)
+            .and_then(|index| order.get(index + 1).copied())
+    }
+}
+
+pub fn resolver_strategy_order() -> [ResolverStrategy; 3] {
+    [
+        ResolverStrategy::PotProvider,
+        ResolverStrategy::WebEmbedded,
+        ResolverStrategy::Legacy,
+    ]
+}
+
+fn pot_plugin_dir() -> PathBuf {
+    std::env::var("BKGRND_YTDLP_PLUGIN_DIR")
+        .ok()
+        .map(PathBuf::from)
+        .or_else(|| dirs::home_dir().map(|home| home.join(".bkgrnd/yt-dlp-plugins")))
+        .unwrap_or_else(|| PathBuf::from(".bkgrnd/yt-dlp-plugins"))
+}
+
+fn strategy_argument_sets(strategy: ResolverStrategy) -> Vec<Vec<String>> {
+    match strategy {
+        ResolverStrategy::PotProvider => {
+            let plugin_dir = pot_plugin_dir();
+            vec![vec![
+                "--plugin-dirs".to_string(),
+                plugin_dir.to_string_lossy().into_owned(),
+                "--extractor-args".to_string(),
+                POT_PROVIDER_ARGS.to_string(),
+                "--extractor-args".to_string(),
+                POT_PLAYER_CLIENT.to_string(),
+            ]]
+        }
+        ResolverStrategy::WebEmbedded => vec![vec![
+            "--extractor-args".to_string(),
+            EMBEDDED_PLAYER_CLIENT.to_string(),
+        ]],
+        ResolverStrategy::Legacy => vec![
+            vec![
+                "--extractor-args".to_string(),
+                FAST_PLAYER_CLIENT.to_string(),
+            ],
+            Vec::new(),
+        ],
+    }
+}
 
 fn js_runtime_arg() -> Option<String> {
     std::env::var("BKGRND_YTDLP_JS_RUNTIMES")
@@ -133,44 +211,11 @@ fn js_runtime_arg() -> Option<String> {
         .or_else(|| std::env::var("WOPR_YTDLP_JS_RUNTIMES").ok())
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
-}
-
-pub async fn extract_stream_url(_app: &AppHandle, url: &str) -> Result<String, String> {
-    let format = "bestaudio[ext=m4a]/bestaudio[acodec^=mp4a]/bestaudio/best";
-    eprintln!("[ytdlp] Resolving stream for {}", url);
-    let js = js_runtime_arg();
-
-    for fast in [true, false] {
-        let mut args: Vec<&str> = vec!["-f", format, "--get-url", "--no-playlist"];
-        if fast {
-            args.push("--extractor-args");
-            args.push(FAST_PLAYER_CLIENT);
-        }
-        if let Some(value) = js.as_deref() {
-            args.push("--js-runtimes");
-            args.push(value);
-        }
-        args.push(url);
-
-        let output = ytdlp_command(&args).output().await.map_err(|e| {
-            eprintln!("[ytdlp] Spawn failed: {}", e);
-            format!("yt-dlp spawn failed: {}", e)
-        })?;
-
-        if output.status.success() {
-            let result = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !result.is_empty() {
-                return Ok(result);
-            }
-        } else if !fast {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            eprintln!("[ytdlp] Resolve failed: {}", stderr.trim());
-            return Err(user_facing_ytdlp_error(&stderr));
-        } else {
-            eprintln!("[ytdlp] fast client failed, falling back to default");
-        }
-    }
-    Err("YouTube did not return a playable stream URL.".to_string())
+        .or_else(|| {
+            let deno = PathBuf::from("/opt/homebrew/bin/deno");
+            deno.is_file()
+                .then(|| format!("deno:{}", deno.to_string_lossy()))
+        })
 }
 
 #[derive(Debug)]
@@ -181,90 +226,150 @@ pub struct StreamInfo {
     pub video_id: String,
     pub channel: String,
     pub duration: Option<f64>,
+    pub strategy: ResolverStrategy,
 }
 
-pub async fn resolve_stream_info(_app: &AppHandle, url: &str) -> Result<StreamInfo, String> {
+pub async fn resolve_stream_info_exact(
+    app: &AppHandle,
+    url: &str,
+    strategy: ResolverStrategy,
+) -> Result<StreamInfo, String> {
+    if std::env::var("BKGRND_VERIFY_FAIL_STRATEGIES")
+        .ok()
+        .map(|value| {
+            value
+                .split(',')
+                .map(str::trim)
+                .any(|label| label == strategy.label())
+        })
+        .unwrap_or(false)
+    {
+        eprintln!(
+            "[ytdlp] verification mode forced {} failure",
+            strategy.label()
+        );
+        return Err(format!(
+            "Verification mode forced {} failure",
+            strategy.label()
+        ));
+    }
+    resolve_stream_info_with_strategies(app, url, &[strategy]).await
+}
+
+async fn resolve_stream_info_with_strategies(
+    _app: &AppHandle,
+    url: &str,
+    strategies: &[ResolverStrategy],
+) -> Result<StreamInfo, String> {
     let format = "bestaudio[ext=m4a]/bestaudio[acodec^=mp4a]/bestaudio/best";
     let js = js_runtime_arg();
     eprintln!("[ytdlp] Resolving metadata + stream for {}", url);
+    let mut last_error = None;
 
-    for fast in [true, false] {
-        let mut args: Vec<&str> = vec![
-            "-f", format, "--no-playlist",
-            "--print", "%(title)s",
-            "--print", "%(is_live)s",
-            "--print", "%(id)s",
-            "--print", "%(channel,uploader)s",
-            "--print", "%(duration)s",
-            "--get-url",
-        ];
-        if fast {
-            args.push("--extractor-args");
-            args.push(FAST_PLAYER_CLIENT);
+    for strategy in strategies.iter().copied() {
+        let argument_sets = strategy_argument_sets(strategy);
+        if argument_sets.is_empty() {
+            eprintln!(
+                "[ytdlp] {} unavailable; provider is not installed",
+                strategy.label()
+            );
+            continue;
         }
-        if let Some(value) = js.as_deref() {
-            args.push("--js-runtimes");
-            args.push(value);
-        }
-        args.push(url);
+        for strategy_args in argument_sets {
+            let mut args = vec![
+                "-f".to_string(),
+                format.to_string(),
+                "--no-playlist".to_string(),
+                "--print".to_string(),
+                "%(title)s".to_string(),
+                "--print".to_string(),
+                "%(is_live)s".to_string(),
+                "--print".to_string(),
+                "%(id)s".to_string(),
+                "--print".to_string(),
+                "%(channel,uploader)s".to_string(),
+                "--print".to_string(),
+                "%(duration)s".to_string(),
+                "--get-url".to_string(),
+            ];
+            args.extend(strategy_args);
+            if let Some(value) = js.as_deref() {
+                args.push("--js-runtimes".to_string());
+                args.push(value.to_string());
+            }
+            args.push(url.to_string());
 
-        let output = ytdlp_command(&args).output().await.map_err(|e| {
-            eprintln!("[ytdlp] Spawn failed: {}", e);
-            format!("yt-dlp spawn failed: {}", e)
-        })?;
+            eprintln!("[ytdlp] trying {}", strategy.label());
+            let output = ytdlp_command_owned(&args).output().await.map_err(|e| {
+                eprintln!("[ytdlp] Spawn failed: {}", e);
+                format!("yt-dlp spawn failed: {}", e)
+            })?;
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            if fast {
-                eprintln!("[ytdlp] fast client failed, falling back to default");
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                eprintln!("[ytdlp] {} failed: {}", strategy.label(), stderr.trim());
+                last_error = Some(user_facing_ytdlp_error(&stderr));
                 continue;
             }
-            eprintln!("[ytdlp] Resolve failed: {}", stderr.trim());
-            return Err(user_facing_ytdlp_error(&stderr));
-        }
 
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let mut lines = stdout.lines().filter(|line| !line.trim().is_empty());
-        let title = lines.next().unwrap_or("Unknown").trim().to_string();
-        let is_live = lines
-            .next()
-            .map(|value| value.trim().eq_ignore_ascii_case("true"))
-            .unwrap_or(false);
-        let video_id = lines
-            .next()
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty())
-            .unwrap_or_else(|| extract_video_id(url));
-        let channel = lines
-            .next()
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty() && !value.eq_ignore_ascii_case("none"))
-            .unwrap_or_default();
-        let duration = lines.next().and_then(parse_duration);
-        let stream_url = lines
-            .find(|line| line.starts_with("http://") || line.starts_with("https://"))
-            .map(str::trim)
-            .unwrap_or("")
-            .to_string();
-
-        if stream_url.is_empty() {
-            if fast {
-                continue;
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            match parse_stream_info_output(&stdout, url, strategy) {
+                Ok(info) => return Ok(info),
+                Err(error) => {
+                    eprintln!("[ytdlp] {} output invalid: {}", strategy.label(), error);
+                    last_error = Some(error);
+                }
             }
-            return Err("YouTube did not return a playable stream URL.".to_string());
         }
-
-        return Ok(StreamInfo {
-            stream_url,
-            title,
-            is_live,
-            video_id,
-            channel,
-            duration,
-        });
     }
 
-    Err("YouTube did not return a playable stream URL.".to_string())
+    Err(last_error.unwrap_or_else(|| "YouTube did not return a playable stream URL.".to_string()))
+}
+
+fn parse_stream_info_output(
+    stdout: &str,
+    url: &str,
+    strategy: ResolverStrategy,
+) -> Result<StreamInfo, String> {
+    let mut lines = stdout.lines().filter(|line| !line.trim().is_empty());
+    let title = lines.next().unwrap_or("Unknown").trim().to_string();
+    let is_live = lines
+        .next()
+        .map(|value| value.trim().eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    let video_id = lines
+        .next()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| extract_video_id(url));
+    let channel = lines
+        .next()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty() && !value.eq_ignore_ascii_case("none"))
+        .unwrap_or_default();
+    let duration = lines.next().and_then(parse_duration);
+    let stream_url = lines
+        .find(|line| line.starts_with("http://") || line.starts_with("https://"))
+        .map(str::trim)
+        .unwrap_or("")
+        .to_string();
+
+    if stream_url.is_empty() {
+        return Err(format!(
+            "{} returned no playable stream URL",
+            strategy.label()
+        ));
+    }
+
+    Ok(StreamInfo {
+        stream_url,
+        title,
+        is_live,
+        video_id,
+        channel,
+        duration,
+        strategy,
+    })
 }
 
 fn parse_duration(value: &str) -> Option<f64> {
@@ -282,83 +387,36 @@ fn parse_duration(value: &str) -> Option<f64> {
         .filter(|duration| *duration > 0.0)
 }
 
-/// Search YouTube and resolve the first hit's stream URL in a single yt-dlp
-/// invocation. One process instead of two (search, then resolve) — this is
-/// the hot path for starting Spotify conversions.
+/// Search YouTube for the first Spotify match, then resolve that concrete
+/// video through the same POT -> embedded -> legacy strategy chain used by
+/// direct playback.
 #[derive(Debug)]
 pub struct ResolvedTrack {
     pub stream_url: String,
     pub url: String,
     pub video_id: String,
     pub duration: Option<f64>,
+    pub is_live: bool,
+    pub strategy: ResolverStrategy,
 }
 
 pub async fn search_resolve_first(
-    _app: &AppHandle,
+    app: &AppHandle,
     query: &str,
 ) -> Result<Option<ResolvedTrack>, String> {
-    let format = "bestaudio[ext=m4a]/bestaudio[acodec^=mp4a]/bestaudio/best";
-    let search_arg = format!("ytsearch1:{}", query);
-    let js = js_runtime_arg();
-
-    for fast in [true, false] {
-        let mut args: Vec<&str> = vec![
-            "-f", format, "--no-playlist",
-            "--print", "%(id)s",
-            "--print", "%(duration)s",
-            "--get-url",
-        ];
-        if fast {
-            args.push("--extractor-args");
-            args.push(FAST_PLAYER_CLIENT);
-        }
-        if let Some(value) = js.as_deref() {
-            args.push("--js-runtimes");
-            args.push(value);
-        }
-        args.push(&search_arg);
-
-        let output = ytdlp_command(&args)
-            .output()
-            .await
-            .map_err(|e| format!("yt-dlp spawn failed: {}", e))?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            if fast {
-                eprintln!("[ytdlp] fast client search-resolve failed, falling back");
-                continue;
-            }
-            return Err(user_facing_ytdlp_error(&stderr));
-        }
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let mut lines = stdout.lines().filter(|line| !line.trim().is_empty());
-        let Some(video_id) = lines.next().map(str::trim).filter(|id| !id.is_empty()) else {
-            return Ok(None); // no search results
-        };
-        let duration = lines.next().and_then(parse_duration);
-        let stream_url = lines
-            .find(|line| line.starts_with("http://") || line.starts_with("https://"))
-            .map(str::trim)
-            .unwrap_or("")
-            .to_string();
-        if stream_url.is_empty() {
-            if fast {
-                continue;
-            }
-            return Ok(None);
-        }
-
-        return Ok(Some(ResolvedTrack {
-            stream_url,
-            url: format!("https://www.youtube.com/watch?v={}", video_id),
-            video_id: video_id.to_string(),
-            duration,
-        }));
-    }
-
-    Ok(None)
+    let Some(result) = search_first_music(app, query).await? else {
+        return Ok(None);
+    };
+    let info = resolve_stream_info_with_strategies(app, &result.url, &resolver_strategy_order())
+        .await?;
+    Ok(Some(ResolvedTrack {
+        stream_url: info.stream_url,
+        url: result.url,
+        video_id: info.video_id,
+        duration: info.duration.or(result.duration),
+        is_live: info.is_live,
+        strategy: info.strategy,
+    }))
 }
 
 fn user_facing_ytdlp_error(stderr: &str) -> String {
@@ -585,4 +643,68 @@ pub async fn enumerate_playlist(_app: &AppHandle, url: &str) -> Result<PlaylistR
         items,
         title: pl_title,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        parse_stream_info_output, resolver_strategy_order, strategy_argument_sets,
+        ResolverStrategy, POT_PLAYER_CLIENT, POT_PROVIDER_ARGS,
+    };
+
+    #[test]
+    fn resolver_strategy_order_prefers_pot_then_embedded_then_legacy() {
+        assert_eq!(
+            resolver_strategy_order(),
+            [
+                ResolverStrategy::PotProvider,
+                ResolverStrategy::WebEmbedded,
+                ResolverStrategy::Legacy,
+            ]
+        );
+    }
+
+    #[test]
+    fn resolver_strategy_next_is_bounded() {
+        assert_eq!(
+            ResolverStrategy::PotProvider.next(),
+            Some(ResolverStrategy::WebEmbedded)
+        );
+        assert_eq!(
+            ResolverStrategy::WebEmbedded.next(),
+            Some(ResolverStrategy::Legacy)
+        );
+        assert_eq!(ResolverStrategy::Legacy.next(), None);
+    }
+
+    #[test]
+    fn pot_strategy_always_produces_provider_arguments() {
+        let attempts = strategy_argument_sets(ResolverStrategy::PotProvider);
+        assert_eq!(attempts.len(), 1);
+        assert!(attempts[0].iter().any(|arg| arg == "--plugin-dirs"));
+        assert!(attempts[0].iter().any(|arg| arg == POT_PROVIDER_ARGS));
+        assert!(attempts[0].iter().any(|arg| arg == POT_PLAYER_CLIENT));
+    }
+
+    #[test]
+    fn legacy_strategy_keeps_both_compatible_attempts() {
+        let attempts = strategy_argument_sets(ResolverStrategy::Legacy);
+        assert_eq!(attempts.len(), 2);
+        assert!(attempts[0]
+            .iter()
+            .any(|arg| arg.contains("youtube:player_client=android_vr")));
+        assert!(attempts[1].is_empty());
+    }
+
+    #[test]
+    fn missing_stream_url_reports_the_strategy_that_failed() {
+        let error = parse_stream_info_output(
+            "Example title\ntrue\nvideo-id\nchannel\nnone\n",
+            "https://www.youtube.com/watch?v=video-id",
+            ResolverStrategy::WebEmbedded,
+        )
+        .expect_err("metadata without a URL must fail");
+        assert!(error.contains("web-embedded"));
+        assert!(error.contains("no playable stream URL"));
+    }
 }

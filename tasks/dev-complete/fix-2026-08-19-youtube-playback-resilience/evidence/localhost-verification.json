@@ -1,0 +1,18 @@
+{
+  "version": "1.0",
+  "timestamp": "2026-08-19T18:27:44Z",
+  "task_dir": "fix-2026-08-19-youtube-playback-resilience",
+  "base_url": "http://localhost:5001",
+  "verdict": "PASS",
+  "total_checks": 2,
+  "passed": 2,
+  "failed": 0,
+  "generated_by": "verify-localhost.sh",
+  "script_hash": "a7fc6fb653ca0eea623b0a2ca894f73019b7528028bba0a1466e19ce5a7440fa",
+  "blast_radius": {
+    "changed_client_files": 0,
+    "declared_routes": 0,
+    "warning": false
+  },
+  "checks": [{"type":"health","target":"http://localhost:5001/api/health","method":"bash","status":"PASS","detail":"skipped \u2014 non-web task, no localhost:5001 web server required"},{"type":"acceptance_tests","target":"run-acceptance-tests.sh","method":"bash","status":"PASS","detail":"All acceptance tests passed"}]
+}

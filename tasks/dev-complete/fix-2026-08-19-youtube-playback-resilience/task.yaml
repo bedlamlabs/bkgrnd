@@ -1,0 +1,82 @@
+id: "fix-2026-08-19-youtube-playback-resilience"
+title: "YouTube playback resilience hotfix"
+priority: P0
+status: dev-complete
+project: bkgrnd
+created_at: "2026-08-19"
+updated_at: "2026-08-19"
+complexity: 7
+hotfix: true
+ui_changes: false
+non_web_task: true
+domains: ["desktop", "playback", "youtube"]
+depends_on: []
+summary: >
+  Restore reliable YouTube playback by preferring the patched Proof-of-Origin
+  resolver, falling back to web_embedded and legacy extraction, and recovering
+  live sessions when media authorization expires after startup.
+
+files_touched:
+  - src-tauri/src/ytdlp.rs
+  - src-tauri/src/player.rs
+  - src-tauri/src/mpv.rs
+  - src-tauri/tauri.conf.json
+  - scripts/install-bgutil-provider.sh
+  - scripts/install-macos.sh
+  - scripts/verify-youtube-playback.sh
+  - package.json
+
+acceptance_tests:
+  - id: AT-1
+    criterion: "Unavailable YouTube streams automatically try POT, web_embedded, and legacy startup strategies in that order."
+    traces_to: "Feature 1"
+    verify:
+      localhost:
+        primary:
+          tool: bash
+          cmd: "export TASK_DIR=${HOSAKA_TASK_DIR:-tasks/in-progress/fix-2026-08-19-youtube-playback-resilience}; bash \"$TASK_DIR/tests/youtube-playback-resilience.test.sh\""
+          expect: contains "AT-1 PASS"
+      production:
+        primary:
+          tool: bash
+          cmd: "bash scripts/verify-youtube-playback.sh --startup-only"
+          expect: contains "AT-1 PASS"
+  - id: AT-2
+    criterion: "A live stream that stops advancing automatically moves to the next strategy and resumes."
+    traces_to: "Feature 2"
+    verify:
+      localhost:
+        primary:
+          tool: bash
+          cmd: "export TASK_DIR=${HOSAKA_TASK_DIR:-tasks/in-progress/fix-2026-08-19-youtube-playback-resilience}; bash \"$TASK_DIR/tests/youtube-playback-resilience.test.sh\""
+          expect: contains "AT-2 PASS"
+      production:
+        primary:
+          tool: bash
+          cmd: "bash scripts/verify-youtube-playback.sh --soak-seconds 95"
+          expect: contains "AT-2 PASS"
+  - id: AT-3
+    criterion: "The complete desktop Rust test suite remains green."
+    traces_to: "Features 1 and 2"
+    verify:
+      localhost:
+        primary:
+          tool: bash
+          cmd: "cargo test --manifest-path src-tauri/Cargo.toml"
+          expect: exit_0
+      production:
+        primary:
+          tool: bash
+          cmd: "pgrep -f 'Applications.*bkgrnd.app.*Contents.*MacOS.*bkgrnd' >/dev/null && echo 'AT-3 PASS'"
+          expect: contains "AT-3 PASS"
+
+red_tdd:
+  commands:
+    - id: RED-1
+      cmd: "TASK_DIR=${HOSAKA_TASK_DIR:-tasks/backlog/fix-2026-08-19-youtube-playback-resilience}; bash \"$TASK_DIR/tests/youtube-playback-resilience.test.sh\""
+  baseline_all_fail: true
+  red_evidence: "Before implementation, ytdlp.rs has only android_vr/default extraction and player.rs has no stalled-live-session recovery state, so both source-level behavioral guards fail."
+
+baseline_hashes:
+  "youtube-playback-resilience.test.sh": "efd8a665f8f5c9923736b6f0c7cf8fe4b7426489a5b171cf78688c1f3d30e7af"
+external_blockers: []

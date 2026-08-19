@@ -1,0 +1,14 @@
+{
+  "gate": "START",
+  "timestamp": "2026-08-19T16:19:49Z",
+  "task_id": "fix-2026-08-19-youtube-playback-resilience",
+  "task_title": "YouTube playback resilience hotfix",
+  "agent_model": "hosaka-gate.sh",
+  "summary": "Validated task ready to begin development",
+  "transition": "backlog->in-progress",
+  "decisions": [],
+  "skipped_checks": [],
+  "source_artifacts": ["backlog/fix-2026-08-19-youtube-playback-resilience/task.yaml"],
+  "start_commit": "73440930a464a0f445b3f9f4dfe885e179340c2b",
+  "spec_hash": "7174980122b663121947c31c66b99a39238eeb941c606b11dbaf44781a6e4bf1"
+}

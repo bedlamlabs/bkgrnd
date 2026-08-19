@@ -1,0 +1,12 @@
+{
+  "gate": "QA",
+  "timestamp": "2026-08-19T18:34:45Z",
+  "task_id": "fix-2026-08-19-youtube-playback-resilience",
+  "task_title": "YouTube playback resilience hotfix",
+  "agent_model": "hosaka-gate.sh",
+  "summary": "Validated QA pass before promoting to dev-complete",
+  "transition": "code-complete->dev-complete",
+  "decisions": [],
+  "skipped_checks": ["Helga NEEDS_REVIEW superseded by authoritative Architect PASS"],
+  "source_artifacts": ["code-complete/fix-2026-08-19-youtube-playback-resilience/task.yaml"]
+}

@@ -92,6 +92,9 @@ pub async fn spawn_mpv(
     // next to mpv.exe in the same dir, so no env is needed.
     #[cfg(target_os = "macos")]
     command.env("DYLD_LIBRARY_PATH", &mpv_bundle_dir);
+    if std::env::var("BKGRND_VERIFY_MUTE_AUDIO").as_deref() == Ok("1") {
+        command.arg("--ao=null");
+    }
     let mut child = command
         .args([
             "--no-video",
@@ -207,9 +210,11 @@ pub struct StatusSnapshot {
     pub paused: bool,
     pub position: Option<f64>,
     pub duration: Option<f64>,
+    pub buffering: bool,
+    pub core_idle: bool,
 }
 
-/// Read pause/time-pos/duration over ONE IPC connection. Status is polled
+/// Read playback state over ONE IPC connection. Status is polled
 /// every 1-2s by both the popover and the WOPR sync loop; three separate
 /// connects per poll (each with its own 3s timeout) made a wedged mpv stall
 /// callers for ~9s.
@@ -219,7 +224,13 @@ pub async fn status_snapshot(ipc_path: &str) -> StatusSnapshot {
     };
     let (reader, mut writer) = tokio::io::split(stream);
 
-    let properties = ["pause", "time-pos", "duration"];
+    let properties = [
+        "pause",
+        "time-pos",
+        "duration",
+        "paused-for-cache",
+        "core-idle",
+    ];
     let mut request = String::new();
     for (index, property) in properties.iter().enumerate() {
         let msg = serde_json::json!({
@@ -233,7 +244,7 @@ pub async fn status_snapshot(ipc_path: &str) -> StatusSnapshot {
         return StatusSnapshot::default();
     }
 
-    let mut answers: [Option<serde_json::Value>; 3] = [None, None, None];
+    let mut answers: [Option<serde_json::Value>; 5] = [None, None, None, None, None];
     let mut buf_reader = BufReader::new(reader);
     let read_result = tokio::time::timeout(std::time::Duration::from_secs(3), async {
         let mut line = String::new();
@@ -252,7 +263,12 @@ pub async fn status_snapshot(ipc_path: &str) -> StatusSnapshot {
             };
             let index = (request_id as usize).wrapping_sub(1);
             if index < answers.len() && answers[index].is_none() {
-                answers[index] = Some(parsed.get("data").cloned().unwrap_or(serde_json::Value::Null));
+                answers[index] = Some(
+                    parsed
+                        .get("data")
+                        .cloned()
+                        .unwrap_or(serde_json::Value::Null),
+                );
                 received += 1;
             }
         }
@@ -274,11 +290,23 @@ pub async fn status_snapshot(ipc_path: &str) -> StatusSnapshot {
             .unwrap_or(false),
         position: number(&answers[1]),
         duration: number(&answers[2]).filter(|duration| *duration > 0.0),
+        buffering: answers[3]
+            .as_ref()
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+        core_idle: answers[4]
+            .as_ref()
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
     }
 }
 
 pub async fn pause(ipc_path: &str) -> Result<(), String> {
-    mpv_command(ipc_path, &[serde_json::json!("cycle"), serde_json::json!("pause")]).await?;
+    mpv_command(
+        ipc_path,
+        &[serde_json::json!("cycle"), serde_json::json!("pause")],
+    )
+    .await?;
     Ok(())
 }
 
@@ -305,7 +333,9 @@ pub async fn stop_stale_mpv() {
         let own_prefix = format!("{}{}-", IPC_PREFIX, std::process::id());
         for entry in entries.flatten() {
             let path = entry.path();
-            let Some(path_str) = path.to_str() else { continue };
+            let Some(path_str) = path.to_str() else {
+                continue;
+            };
             if !path_str.starts_with(IPC_PREFIX) || path_str.starts_with(&own_prefix) {
                 continue;
             }
@@ -318,7 +348,10 @@ pub async fn stop_stale_mpv() {
 pub async fn get_volume(ipc_path: &str) -> f64 {
     match mpv_command(
         ipc_path,
-        &[serde_json::json!("get_property"), serde_json::json!("volume")],
+        &[
+            serde_json::json!("get_property"),
+            serde_json::json!("volume"),
+        ],
     )
     .await
     {

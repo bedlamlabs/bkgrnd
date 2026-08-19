@@ -1,0 +1,12 @@
+{
+  "version": "1.0",
+  "timestamp": "2026-08-19T16:01:27Z",
+  "task_dir": "fix-2026-08-19-youtube-playback-resilience",
+  "contract_file": "requirements-contract.md",
+  "contract_sha256": "5bf93fa38f45ae9582bdf07f1a652e3d84ee8fcdb3ca98960068ffe5e92bb5da",
+  "feature_count": 2,
+  "approved": true,
+  "approved_by": "geoffrey",
+  "generated_by": "contract-approve.sh",
+  "script_hash": "1fc1a33299eedfbcc3a9a0c33ef79546d4f5fdfa1e52561bd1add575d815d733"
+}

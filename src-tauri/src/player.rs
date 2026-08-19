@@ -1,4 +1,5 @@
 use serde::Serialize;
+use std::future::Future;
 use std::sync::Arc;
 use tauri::AppHandle;
 use tokio::sync::Mutex;
@@ -6,7 +7,183 @@ use tokio::sync::Mutex;
 use crate::history;
 use crate::mpv::{self, MpvSession};
 use crate::spotify;
-use crate::ytdlp::{self, PlaylistItem};
+use crate::ytdlp::{self, PlaylistItem, ResolverStrategy};
+
+const LIVE_STALL_POLL_SECONDS: u64 = 3;
+const LIVE_STALL_SCORE_LIMIT: u8 = 4;
+
+#[derive(Debug, Clone)]
+struct SessionRecovery {
+    source_url: String,
+    is_live: bool,
+    strategy: ResolverStrategy,
+}
+
+#[derive(Debug, Default)]
+struct PlaybackStallDetector {
+    last_position: Option<f64>,
+    stagnant_score: u8,
+    saw_progress: bool,
+}
+
+impl PlaybackStallDetector {
+    fn observe(&mut self, snapshot: mpv::StatusSnapshot) -> bool {
+        if snapshot.paused {
+            self.stagnant_score = 0;
+            self.last_position = snapshot.position;
+            return false;
+        }
+
+        let advanced = match (self.last_position, snapshot.position) {
+            (Some(previous), Some(current)) => current > previous + 0.25,
+            (None, Some(current)) => current > 0.25,
+            _ => false,
+        };
+        self.last_position = snapshot.position.or(self.last_position);
+
+        if advanced {
+            self.saw_progress = true;
+            self.stagnant_score = 0;
+            return false;
+        }
+
+        let weight = if snapshot.buffering || snapshot.core_idle {
+            2
+        } else {
+            1
+        };
+        self.stagnant_score = self.stagnant_score.saturating_add(weight);
+
+        // Give initial startup more time than a stream that was already heard.
+        let limit = if self.saw_progress {
+            LIVE_STALL_SCORE_LIMIT
+        } else {
+            LIVE_STALL_SCORE_LIMIT + 2
+        };
+        self.stagnant_score >= limit
+    }
+}
+
+fn recovery_strategy_order(current: ResolverStrategy) -> Vec<ResolverStrategy> {
+    let mut strategies = Vec::new();
+    let mut next = current.next();
+    while let Some(strategy) = next {
+        strategies.push(strategy);
+        next = strategy.next();
+    }
+    strategies
+}
+
+fn recovery_install_allowed(
+    expected_gen: u64,
+    current_gen: u64,
+    desired_paused: bool,
+    has_session: bool,
+) -> bool {
+    expected_gen == current_gen && !desired_paused && has_session
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RecoveryResult {
+    Recovered,
+    Cancelled,
+    Exhausted,
+}
+
+fn should_clear_after_recovery(result: RecoveryResult) -> bool {
+    result == RecoveryResult::Exhausted
+}
+
+fn live_exit_recovery_strategy(
+    clean_exit: bool,
+    shuffle: bool,
+    recovery: Option<&SessionRecovery>,
+) -> Option<ResolverStrategy> {
+    if clean_exit || shuffle {
+        return None;
+    }
+    recovery
+        .filter(|context| context.is_live)
+        .and_then(|context| context.strategy.next())
+}
+
+async fn try_startup_strategies<T, U, Resolve, ResolveFuture, Start, StartFuture>(
+    strategies: impl IntoIterator<Item = ResolverStrategy>,
+    mut resolve: Resolve,
+    mut start: Start,
+) -> Result<(ResolverStrategy, U), String>
+where
+    Resolve: FnMut(ResolverStrategy) -> ResolveFuture,
+    ResolveFuture: Future<Output = Result<T, String>>,
+    Start: FnMut(T) -> StartFuture,
+    StartFuture: Future<Output = Result<U, String>>,
+{
+    let mut last_error = None;
+    for strategy in strategies {
+        let resolved = match resolve(strategy).await {
+            Ok(resolved) => resolved,
+            Err(error) => {
+                last_error = Some(error);
+                continue;
+            }
+        };
+        match start(resolved).await {
+            Ok(started) => return Ok((strategy, started)),
+            Err(error) => last_error = Some(error),
+        }
+    }
+    Err(last_error.unwrap_or_else(|| "No playback strategy could start the stream".to_string()))
+}
+
+async fn resolve_and_spawn(
+    app: &AppHandle,
+    source_url: &str,
+    preferred_title: Option<&str>,
+) -> Result<(ytdlp::StreamInfo, MpvSession), String> {
+    let resolve_app = app.clone();
+    let resolve_url = source_url.to_string();
+    let start_app = app.clone();
+    let start_url = source_url.to_string();
+    let preferred_title = preferred_title.map(str::to_string);
+
+    try_startup_strategies(
+        ytdlp::resolver_strategy_order(),
+        move |strategy| {
+            let app = resolve_app.clone();
+            let url = resolve_url.clone();
+            async move { ytdlp::resolve_stream_info_exact(&app, &url, strategy).await }
+        },
+        move |info: ytdlp::StreamInfo| {
+            let app = start_app.clone();
+            let url = start_url.clone();
+            let title = preferred_title
+                .clone()
+                .filter(|title| !title.trim().is_empty())
+                .unwrap_or_else(|| info.title.clone());
+            async move {
+                let session = mpv::spawn_mpv(&app, &info.stream_url, &title, &url).await?;
+                Ok((info, session))
+            }
+        },
+    )
+    .await
+    .map(|(_, playback)| playback)
+}
+
+fn record_resolver_strategy(strategy: ResolverStrategy, source_url: &str) {
+    let Some(home) = dirs::home_dir() else {
+        return;
+    };
+    let data_dir = home.join(".bkgrnd");
+    if std::fs::create_dir_all(&data_dir).is_ok() {
+        let timestamp_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_millis())
+            .unwrap_or(0);
+        let marker = format!("{}\t{}\t{}\n", timestamp_ms, strategy.label(), source_url);
+        let _ = std::fs::write(data_dir.join("last-resolver-strategy"), marker);
+    }
+}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -50,6 +227,9 @@ impl PlayerStatus {
 
 pub struct PlayerState {
     pub session: Option<MpvSession>,
+    // User intent, updated before pause IPC is sent so an in-flight recovery
+    // can never replace a just-paused stream with an unpaused session.
+    pub desired_paused: bool,
     // Queue-level artwork (e.g. the Spotify playlist cover) shown instead of
     // per-track art while this queue plays.
     pub queue_artwork: Option<String>,
@@ -73,6 +253,7 @@ impl PlayerState {
     pub fn new() -> Self {
         PlayerState {
             session: None,
+            desired_paused: false,
             queue_artwork: None,
             shuffle: false,
             session_gen: 0,
@@ -95,6 +276,16 @@ fn queue_item_from_search(track: &spotify::TrackMeta, result: ytdlp::SearchResul
         thumbnail: result.thumbnail,
         channel: track.artist(),
         duration: result.duration,
+    }
+}
+
+fn update_queue_item_from_recovery(item: &mut PlaylistItem, info: &ytdlp::StreamInfo) {
+    item.video_id = info.video_id.clone();
+    item.title = info.title.clone();
+    item.channel = info.channel.clone();
+    item.duration = info.duration;
+    if !info.video_id.is_empty() {
+        item.thumbnail = ytdlp::thumbnail_url(&info.video_id);
     }
 }
 
@@ -143,7 +334,7 @@ pub async fn play(url: &str, app: AppHandle, state: SharedState) -> Result<Playe
         play_queue_item(start_index, app, state.clone()).await?;
         get_status(state).await
     } else {
-        let info = ytdlp::resolve_stream_info(&app, url).await?;
+        let (info, session) = resolve_and_spawn(&app, url, None).await?;
         let video_id = if info.video_id.is_empty() {
             ytdlp::extract_video_id(url)
         } else {
@@ -175,8 +366,18 @@ pub async fn play(url: &str, app: AppHandle, state: SharedState) -> Result<Playe
             info.duration,
         );
 
-        let session = mpv::spawn_mpv(&app, &info.stream_url, &info.title, url).await?;
-        install_session(&app, &state, session, info.title).await;
+        install_session(
+            &app,
+            &state,
+            session,
+            info.title,
+            Some(SessionRecovery {
+                source_url: url.to_string(),
+                is_live: info.is_live,
+                strategy: info.strategy,
+            }),
+        )
+        .await;
 
         get_status(state).await
     }
@@ -202,9 +403,9 @@ async fn play_spotify(
 
     let mut tracks = source.tracks.into_iter().take(limit);
 
-    // First track: search + stream-resolve in ONE yt-dlp invocation so audio
-    // starts as fast as possible; the queue fills behind it.
-    let mut first: Option<(PlaylistItem, String)> = None;
+    // Resolve the first match through the resilient strategy chain before the
+    // remaining queue fills in the background.
+    let mut first: Option<(PlaylistItem, String, bool, ResolverStrategy)> = None;
     for track in tracks.by_ref() {
         match ytdlp::search_resolve_first(&app, &track.search_query()).await {
             Ok(Some(resolved)) => {
@@ -216,7 +417,7 @@ async fn play_spotify(
                     channel: track.artist(),
                     duration: resolved.duration,
                 };
-                first = Some((item, resolved.stream_url));
+                first = Some((item, resolved.stream_url, resolved.is_live, resolved.strategy));
                 break;
             }
             Ok(None) => continue,
@@ -230,7 +431,7 @@ async fn play_spotify(
             }
         }
     }
-    let Some((first_item, first_stream_url)) = first else {
+    let Some((first_item, first_stream_url, first_is_live, first_strategy)) = first else {
         return Err("Could not find YouTube matches for this Spotify URL.".to_string());
     };
 
@@ -265,8 +466,20 @@ async fn play_spotify(
 
     // Stream URL is already resolved; spawn mpv directly instead of going
     // through play_queue_item (which would re-resolve it).
-    let session = mpv::spawn_mpv(&app, &first_stream_url, &first_item.title, &first_item.url).await?;
-    install_session(&app, &state, session, first_item.title.clone()).await;
+    let session =
+        mpv::spawn_mpv(&app, &first_stream_url, &first_item.title, &first_item.url).await?;
+    install_session(
+        &app,
+        &state,
+        session,
+        first_item.title.clone(),
+        Some(SessionRecovery {
+            source_url: first_item.url.clone(),
+            is_live: first_is_live,
+            strategy: first_strategy,
+        }),
+    )
+    .await;
 
     let remaining: Vec<spotify::TrackMeta> = tracks.collect();
     if !remaining.is_empty() {
@@ -306,10 +519,10 @@ async fn play_spotify(
     get_status(state).await
 }
 
-
 enum AdvanceAction {
     Index(usize),
     RandomStream,
+    Recover(SessionRecovery),
 }
 
 /// Cheap non-crypto randomness for shuffle picks (no rand dependency).
@@ -395,7 +608,11 @@ async fn play_random_saved(app: AppHandle, state: SharedState) -> Result<(), Str
         match play_queue_item(0, app.clone(), state.clone()).await {
             Ok(()) => return Ok(()),
             Err(err) => {
-                eprintln!("[player] shuffle pick failed (attempt {}): {}", attempt + 1, err);
+                eprintln!(
+                    "[player] shuffle pick failed (attempt {}): {}",
+                    attempt + 1,
+                    err
+                );
             }
         }
     }
@@ -424,17 +641,82 @@ async fn install_session(
     state: &SharedState,
     session: MpvSession,
     title: String,
+    recovery: Option<SessionRecovery>,
 ) {
     let gen = {
         let mut s = state.lock().await;
         s.session_gen += 1;
         s.session = Some(session);
+        s.desired_paused = false;
         s.current_title = title;
         s.session_gen
     };
 
-    let state_clone = state.clone();
-    let app_clone = app.clone();
+    if let Some(context) = recovery.as_ref() {
+        record_resolver_strategy(context.strategy, &context.source_url);
+    }
+
+    spawn_session_watchers(app.clone(), state.clone(), gen, recovery);
+}
+
+fn spawn_session_watchers(
+    app: AppHandle,
+    state: SharedState,
+    gen: u64,
+    recovery: Option<SessionRecovery>,
+) {
+    if let Some(recovery) = recovery.clone().filter(|context| context.is_live) {
+        let state_clone = state.clone();
+        let app_clone = app.clone();
+        tokio::spawn(async move {
+            let mut detector = PlaybackStallDetector::default();
+            let freeze_for_verification = std::env::var("BKGRND_VERIFY_FREEZE_STALL_STRATEGY")
+                .ok()
+                .map(|label| label.trim() == recovery.strategy.label())
+                .unwrap_or(false);
+            let mut frozen_position = None;
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(LIVE_STALL_POLL_SECONDS)).await;
+
+                let ipc_path = {
+                    let s = state_clone.lock().await;
+                    if s.session_gen != gen {
+                        return;
+                    }
+                    match s.session.as_ref() {
+                        Some(session) => session.ipc_path.clone(),
+                        None => return,
+                    }
+                };
+                let mut snapshot = mpv::status_snapshot(&ipc_path).await;
+                if freeze_for_verification {
+                    frozen_position = frozen_position.or(snapshot.position);
+                    snapshot.position = frozen_position;
+                    snapshot.buffering = true;
+                }
+                if detector.observe(snapshot) {
+                    eprintln!(
+                        "[player] live stream stalled on {}; recovering",
+                        recovery.strategy.label()
+                    );
+                    let result = Box::pin(recover_stalled_live_session(
+                        app_clone,
+                        state_clone.clone(),
+                        gen,
+                        recovery,
+                    ))
+                    .await;
+                    if should_clear_after_recovery(result) {
+                        clear_owned_session(&state_clone, gen).await;
+                    }
+                    return;
+                }
+            }
+        });
+    }
+
+    let state_clone = state;
+    let app_clone = app;
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
@@ -448,11 +730,17 @@ async fn install_session(
                     Some(ref mut session) => match session.child.try_wait() {
                         Ok(Some(status)) => {
                             let code = status.code().unwrap_or(-1);
-                            s.session = None;
-                            if s.queue_index < 0 {
-                                None
+                            if live_exit_recovery_strategy(code == 0, s.shuffle, recovery.as_ref())
+                                .is_some()
+                            {
+                                recovery.clone().map(AdvanceAction::Recover)
                             } else {
-                                next_action(&s, code == 0)
+                                s.session = None;
+                                if s.queue_index < 0 {
+                                    None
+                                } else {
+                                    next_action(&s, code == 0)
+                                }
                             }
                         }
                         Ok(None) => continue,
@@ -475,7 +763,12 @@ async fn install_session(
                         }
                         let (in_bounds, shuffle, len, current) = {
                             let s = state_clone.lock().await;
-                            (index < s.queue.len(), s.shuffle, s.queue.len(), s.queue_index)
+                            (
+                                index < s.queue.len(),
+                                s.shuffle,
+                                s.queue.len(),
+                                s.queue_index,
+                            )
                         };
                         if !in_bounds {
                             break;
@@ -483,7 +776,10 @@ async fn install_session(
                         match play_queue_item(index, app_clone.clone(), state_clone.clone()).await {
                             Ok(()) => break,
                             Err(err) => {
-                                eprintln!("[player] auto-advance skipping index {}: {}", index, err);
+                                eprintln!(
+                                    "[player] auto-advance skipping index {}: {}",
+                                    index, err
+                                );
                                 index = if shuffle && len > 1 {
                                     random_index(len, current.max(0) as usize)
                                 } else {
@@ -496,11 +792,174 @@ async fn install_session(
                 Some(AdvanceAction::RandomStream) => {
                     let _ = play_random_saved(app_clone.clone(), state_clone.clone()).await;
                 }
+                Some(AdvanceAction::Recover(recovery)) => {
+                    let result = Box::pin(recover_stalled_live_session(
+                        app_clone.clone(),
+                        state_clone.clone(),
+                        gen,
+                        recovery,
+                    ))
+                    .await;
+                    if should_clear_after_recovery(result) {
+                        clear_owned_session(&state_clone, gen).await;
+                    }
+                }
                 None => {}
             }
             return;
         }
     });
+}
+
+async fn clear_owned_session(state: &SharedState, expected_gen: u64) {
+    let old_session = {
+        let mut s = state.lock().await;
+        if s.session_gen != expected_gen {
+            return;
+        }
+        s.session_gen += 1;
+        s.desired_paused = false;
+        s.session.take()
+    };
+    if let Some(mut session) = old_session {
+        mpv::stop_mpv(&mut session).await;
+    }
+}
+
+async fn recover_stalled_live_session(
+    app: AppHandle,
+    state: SharedState,
+    expected_gen: u64,
+    recovery: SessionRecovery,
+) -> RecoveryResult {
+    // Re-read the actual mpv state immediately before recovery. This catches
+    // pause state changed outside the normal command path and synchronizes it
+    // back into user intent rather than replacing it with a playing session.
+    let current_ipc = {
+        let s = state.lock().await;
+        if s.session_gen != expected_gen || s.session.is_none() {
+            return RecoveryResult::Cancelled;
+        }
+        if s.desired_paused {
+            return RecoveryResult::Cancelled;
+        }
+        s.session.as_ref().map(|session| session.ipc_path.clone())
+    };
+    if let Some(ipc_path) = current_ipc {
+        if mpv::status_snapshot(&ipc_path).await.paused {
+            let mut s = state.lock().await;
+            if s.session_gen == expected_gen {
+                s.desired_paused = true;
+            }
+            return RecoveryResult::Cancelled;
+        }
+    }
+
+    for next_strategy in recovery_strategy_order(recovery.strategy) {
+        let info = match ytdlp::resolve_stream_info_exact(&app, &recovery.source_url, next_strategy)
+            .await
+        {
+            Ok(info) => info,
+            Err(error) => {
+                eprintln!(
+                    "[player] live recovery {} resolve failed: {}",
+                    next_strategy.label(),
+                    error
+                );
+                continue;
+            }
+        };
+        let replacement =
+            match mpv::spawn_mpv(&app, &info.stream_url, &info.title, &recovery.source_url).await {
+                Ok(session) => session,
+                Err(error) => {
+                    eprintln!(
+                        "[player] live recovery {} mpv start failed: {}",
+                        next_strategy.label(),
+                        error
+                    );
+                    continue;
+                }
+            };
+
+        let current_ipc = {
+            let s = state.lock().await;
+            if s.session_gen != expected_gen || s.session.is_none() || s.desired_paused {
+                None
+            } else {
+                s.session.as_ref().map(|session| session.ipc_path.clone())
+            }
+        };
+        let Some(current_ipc) = current_ipc else {
+            let mut replacement = replacement;
+            mpv::stop_mpv(&mut replacement).await;
+            return RecoveryResult::Cancelled;
+        };
+        if mpv::status_snapshot(&current_ipc).await.paused {
+            let mut replacement = replacement;
+            mpv::stop_mpv(&mut replacement).await;
+            let mut s = state.lock().await;
+            if s.session_gen == expected_gen {
+                s.desired_paused = true;
+            }
+            return RecoveryResult::Cancelled;
+        }
+
+        let mut replacement = Some(replacement);
+        let installed = {
+            let mut s = state.lock().await;
+            if !recovery_install_allowed(
+                expected_gen,
+                s.session_gen,
+                s.desired_paused,
+                s.session.is_some(),
+            ) {
+                None
+            } else {
+                let old = s.session.take();
+                s.session_gen += 1;
+                s.session = replacement.take();
+                let queue_index = s.queue_index;
+                if queue_index >= 0 {
+                    if let Some(item) = s.queue.get_mut(queue_index as usize) {
+                        update_queue_item_from_recovery(item, &info);
+                    }
+                }
+                s.current_title = info.title.clone();
+                Some((s.session_gen, old))
+            }
+        };
+
+        let Some((new_gen, old_session)) = installed else {
+            if let Some(mut replacement) = replacement {
+                mpv::stop_mpv(&mut replacement).await;
+            }
+            return RecoveryResult::Cancelled;
+        };
+
+        if let Some(mut old_session) = old_session {
+            mpv::stop_mpv(&mut old_session).await;
+        }
+        record_resolver_strategy(info.strategy, &recovery.source_url);
+        eprintln!(
+            "[player] live playback recovered with {}",
+            info.strategy.label()
+        );
+        spawn_session_watchers(
+            app,
+            state,
+            new_gen,
+            Some(SessionRecovery {
+                source_url: recovery.source_url,
+                is_live: info.is_live,
+                strategy: info.strategy,
+            }),
+        );
+        return RecoveryResult::Recovered;
+    }
+
+    eprintln!("[player] live recovery exhausted all resolver strategies");
+    RecoveryResult::Exhausted
 }
 
 fn play_queue_item(
@@ -526,9 +985,19 @@ fn play_queue_item(
             (item.url.clone(), item.title.clone())
         };
 
-        let stream_url = ytdlp::extract_stream_url(&app, &item_url).await?;
-        let session = mpv::spawn_mpv(&app, &stream_url, &item_title, &item_url).await?;
-        install_session(&app, &state, session, item_title).await;
+        let (info, session) = resolve_and_spawn(&app, &item_url, Some(&item_title)).await?;
+        install_session(
+            &app,
+            &state,
+            session,
+            item_title,
+            Some(SessionRecovery {
+                source_url: item_url,
+                is_live: info.is_live,
+                strategy: info.strategy,
+            }),
+        )
+        .await;
 
         Ok(())
     })
@@ -555,6 +1024,9 @@ pub async fn play_next(app: AppHandle, state: SharedState) -> Result<PlayerStatu
         }
         Some(AdvanceAction::RandomStream) => {
             play_random_saved(app, state.clone()).await?;
+        }
+        Some(AdvanceAction::Recover(_)) => {
+            unreachable!("manual next never produces a recovery action")
         }
         None => {
             stop(state.clone()).await?;
@@ -590,8 +1062,24 @@ async fn session_ipc_path(state: &SharedState) -> Result<String, String> {
 }
 
 pub async fn toggle_pause(state: SharedState) -> Result<PlayerStatus, String> {
-    let ipc_path = session_ipc_path(&state).await?;
-    mpv::pause(&ipc_path).await?;
+    let (ipc_path, gen, previous_intent) = {
+        let mut s = state.lock().await;
+        let ipc_path = s
+            .session
+            .as_ref()
+            .map(|session| session.ipc_path.clone())
+            .ok_or_else(|| "Nothing playing".to_string())?;
+        let previous_intent = s.desired_paused;
+        s.desired_paused = !previous_intent;
+        (ipc_path, s.session_gen, previous_intent)
+    };
+    if let Err(error) = mpv::pause(&ipc_path).await {
+        let mut s = state.lock().await;
+        if s.session_gen == gen {
+            s.desired_paused = previous_intent;
+        }
+        return Err(error);
+    }
     get_status(state).await
 }
 
@@ -602,6 +1090,7 @@ pub async fn stop(state: SharedState) -> Result<PlayerStatus, String> {
             mpv::stop_mpv(session).await;
         }
         s.session = None;
+        s.desired_paused = false;
         s.session_gen += 1;
         s.queue_epoch += 1;
         s.queue.clear();
@@ -676,10 +1165,175 @@ pub async fn get_status(state: SharedState) -> Result<PlayerStatus, String> {
         queue_length: s.queue.len(),
         playlist_title: s.playlist_title.clone(),
         channel: current_item.map(|i| i.channel.clone()).unwrap_or_default(),
-        duration: current_item
-            .and_then(|i| i.duration)
-            .or(snapshot.duration),
+        duration: current_item.and_then(|i| i.duration).or(snapshot.duration),
         position: snapshot.position,
         shuffle: s.shuffle,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        live_exit_recovery_strategy, recovery_install_allowed, recovery_strategy_order,
+        should_clear_after_recovery, try_startup_strategies, update_queue_item_from_recovery,
+        PlaybackStallDetector, RecoveryResult, SessionRecovery,
+    };
+    use crate::mpv::StatusSnapshot;
+    use crate::ytdlp::ResolverStrategy;
+    use std::sync::{Arc, Mutex};
+
+    fn snapshot(position: Option<f64>, paused: bool, buffering: bool) -> StatusSnapshot {
+        StatusSnapshot {
+            paused,
+            position,
+            duration: None,
+            buffering,
+            core_idle: false,
+        }
+    }
+
+    #[test]
+    fn stall_detector_triggers_after_progress_then_buffering() {
+        let mut detector = PlaybackStallDetector::default();
+        assert!(!detector.observe(snapshot(Some(1.0), false, false)));
+        assert!(!detector.observe(snapshot(Some(4.0), false, false)));
+        assert!(!detector.observe(snapshot(Some(4.0), false, true)));
+        assert!(detector.observe(snapshot(Some(4.0), false, true)));
+    }
+
+    #[test]
+    fn stall_detector_never_recovers_a_user_paused_stream() {
+        let mut detector = PlaybackStallDetector::default();
+        assert!(!detector.observe(snapshot(Some(10.0), false, false)));
+        assert!(!detector.observe(snapshot(Some(13.0), false, false)));
+        for _ in 0..8 {
+            assert!(!detector.observe(snapshot(Some(13.0), true, true)));
+        }
+    }
+
+    #[test]
+    fn stall_detector_resets_when_position_advances() {
+        let mut detector = PlaybackStallDetector::default();
+        assert!(!detector.observe(snapshot(Some(1.0), false, false)));
+        assert!(!detector.observe(snapshot(Some(4.0), false, false)));
+        assert!(!detector.observe(snapshot(Some(4.0), false, true)));
+        assert!(!detector.observe(snapshot(Some(7.0), false, false)));
+        assert!(!detector.observe(snapshot(Some(7.0), false, true)));
+    }
+
+    #[test]
+    fn recovery_falls_through_every_remaining_strategy() {
+        assert_eq!(
+            recovery_strategy_order(ResolverStrategy::PotProvider),
+            vec![ResolverStrategy::WebEmbedded, ResolverStrategy::Legacy]
+        );
+        assert_eq!(
+            recovery_strategy_order(ResolverStrategy::WebEmbedded),
+            vec![ResolverStrategy::Legacy]
+        );
+        assert!(recovery_strategy_order(ResolverStrategy::Legacy).is_empty());
+    }
+
+    #[test]
+    fn recovery_install_is_rejected_after_user_pause_or_session_change() {
+        assert!(recovery_install_allowed(7, 7, false, true));
+        assert!(!recovery_install_allowed(7, 7, true, true));
+        assert!(!recovery_install_allowed(7, 8, false, true));
+        assert!(!recovery_install_allowed(7, 7, false, false));
+    }
+
+    #[test]
+    fn exhausted_stall_recovery_clears_only_the_owned_dead_session() {
+        assert!(should_clear_after_recovery(RecoveryResult::Exhausted));
+        assert!(!should_clear_after_recovery(RecoveryResult::Recovered));
+        assert!(!should_clear_after_recovery(RecoveryResult::Cancelled));
+    }
+
+    #[test]
+    fn abnormal_live_exit_uses_the_next_strategy() {
+        let recovery = SessionRecovery {
+            source_url: "https://www.youtube.com/watch?v=Lcdi9O2XB4E".to_string(),
+            is_live: true,
+            strategy: ResolverStrategy::PotProvider,
+        };
+        assert_eq!(
+            live_exit_recovery_strategy(false, false, Some(&recovery)),
+            Some(ResolverStrategy::WebEmbedded)
+        );
+        assert_eq!(live_exit_recovery_strategy(true, false, Some(&recovery)), None);
+        assert_eq!(live_exit_recovery_strategy(false, true, Some(&recovery)), None);
+
+        let terminal = SessionRecovery {
+            strategy: ResolverStrategy::Legacy,
+            ..recovery
+        };
+        assert_eq!(live_exit_recovery_strategy(false, false, Some(&terminal)), None);
+    }
+
+    #[test]
+    fn recovery_refreshes_active_queue_metadata() {
+        let mut item = crate::ytdlp::PlaylistItem {
+            url: "https://www.youtube.com/watch?v=old".to_string(),
+            video_id: "old".to_string(),
+            title: "Old title".to_string(),
+            thumbnail: "old-thumbnail".to_string(),
+            channel: "Old channel".to_string(),
+            duration: Some(1.0),
+        };
+        let info = crate::ytdlp::StreamInfo {
+            stream_url: "https://media.example/audio".to_string(),
+            title: "Recovered title".to_string(),
+            is_live: true,
+            video_id: "new".to_string(),
+            channel: "Recovered channel".to_string(),
+            duration: Some(42.0),
+            strategy: ResolverStrategy::WebEmbedded,
+        };
+
+        update_queue_item_from_recovery(&mut item, &info);
+
+        assert_eq!(item.video_id, "new");
+        assert_eq!(item.title, "Recovered title");
+        assert_eq!(item.channel, "Recovered channel");
+        assert_eq!(item.duration, Some(42.0));
+        assert!(item.thumbnail.contains("new"));
+    }
+
+    #[test]
+    fn startup_fallback_continues_after_resolved_stream_cannot_start() {
+        tauri::async_runtime::block_on(async {
+            let resolved = Arc::new(Mutex::new(Vec::new()));
+            let started = Arc::new(Mutex::new(Vec::new()));
+            let resolved_log = resolved.clone();
+            let started_log = started.clone();
+
+            let (strategy, ()) = try_startup_strategies(
+                crate::ytdlp::resolver_strategy_order(),
+                move |strategy| {
+                    resolved_log.lock().unwrap().push(strategy);
+                    std::future::ready(Ok(strategy))
+                },
+                move |strategy| {
+                    started_log.lock().unwrap().push(strategy);
+                    std::future::ready(if strategy == ResolverStrategy::PotProvider {
+                        Err("mpv startup failed".to_string())
+                    } else {
+                        Ok(())
+                    })
+                },
+            )
+            .await
+            .unwrap();
+
+            assert_eq!(strategy, ResolverStrategy::WebEmbedded);
+            assert_eq!(
+                *resolved.lock().unwrap(),
+                vec![ResolverStrategy::PotProvider, ResolverStrategy::WebEmbedded]
+            );
+            assert_eq!(
+                *started.lock().unwrap(),
+                vec![ResolverStrategy::PotProvider, ResolverStrategy::WebEmbedded]
+            );
+        });
+    }
 }

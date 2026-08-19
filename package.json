@@ -5,7 +5,8 @@
   "scripts": {
     "tauri": "tauri",
     "dev": "tauri dev",
-    "build": "tauri build"
+    "build": "tauri build",
+    "deploy:mac": "bash scripts/install-macos.sh"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2"

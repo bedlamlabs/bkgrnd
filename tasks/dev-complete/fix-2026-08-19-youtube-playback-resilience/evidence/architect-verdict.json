@@ -1,0 +1,39 @@
+{
+  "verdict": "PASS",
+  "reason": "Acceptance harness passes AT-1 through AT-3 and the desktop Rust suite passes 18/18. The implementation provides ordered POT, web-embedded, and legacy resolution plus bounded, pause-aware, session-owned live recovery. Helga cited no code defect; NEEDS_REVIEW resulted from a verdict parse error.",
+  "agrees_with_helga": false,
+  "reject_reason_code": null,
+  "architect_model": "codex",
+  "helga_verdict": {
+    "task_dir": "fix-2026-08-19-youtube-playback-resilience",
+    "verdict": "NEEDS_REVIEW",
+    "gate": null,
+    "reason": "verdict field missing or UNKNOWN in Helga output; escalating to Architect review",
+    "tools_used": [
+      "test_runner",
+      "code_search",
+      "file_read"
+    ],
+    "tool_types_count": 3,
+    "turns": 2,
+    "elapsed_seconds": 47.7,
+    "total_tokens": 20202,
+    "investigation_log": [
+      "cat /Users/geoffmccaleb/bkgrnd/tasks/code-complete/fix-2026-08-19-youtube-playback-resilience/spec.md",
+      "bash /Users/geoffmccaleb/bkgrnd/tasks/code-complete/fix-2026-08-19-youtube-playback-resilience/tests/youtube-playback-resilience.test.sh",
+      "rg -n 'YouTube|playback|resilience|hotfix|Restore|reliable|preferring|patched|Proof\\-of\\-Origin|resolver|ytdlp|player' /Users/geoffmccaleb/bkgrnd/src-tauri/src/ytdlp.rs /Users/geoffmccaleb/bkgrnd/src-tauri/src/player.rs /Users/geoffmccaleb/bkgrnd/src-tauri/src/mpv.rs /Users/geoffmccaleb/bkgrnd/src-tauri/tauri.conf.json /Users/geoffmccaleb/bkgrnd/scripts/install-bgutil-provider.sh /Users/geoffmccaleb/bkgrnd/scripts/install-macos.sh /Users/geoffmccaleb/bkgrnd/scripts/verify-youtube-playback.sh /Users/geoffmccaleb/bkgrnd/package.json",
+      "PARSE_ERROR",
+      "cat /Users/geoffmccaleb/bkgrnd/tasks/code-complete/fix-2026-08-19-youtube-playback-resilience/spec.md"
+    ],
+    "reject_reason_code": null,
+    "project": "bkgrnd",
+    "profile_used": "webapp",
+    "architect_escalation_required": true,
+    "original_verdict": "NEEDS_REVIEW",
+    "timestamp": "2026-08-19T18:33:23Z",
+    "generated_by": "helga-gate.sh",
+    "runner_hash": "427f25cfcf59750bd43ec9057859f79c005908ed1728fc4d7445c076a91bc023"
+  },
+  "timestamp": "2026-08-19T18:34:40Z",
+  "generated_by": "architect-escalate.sh"
+}
