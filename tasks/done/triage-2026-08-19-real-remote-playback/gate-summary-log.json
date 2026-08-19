@@ -5,6 +5,11 @@
     "task_id": "triage-2026-08-19-real-remote-playback"
   },
   {
+    "gate": "DEPLOY",
+    "timestamp": "2026-08-19T21:28:47Z",
+    "task_id": "triage-2026-08-19-real-remote-playback"
+  },
+  {
     "gate": "QA",
     "timestamp": "2026-08-19T20:25:27Z",
     "task_id": "triage-2026-08-19-real-remote-playback"

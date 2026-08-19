@@ -1,6 +1,6 @@
 id: "triage-2026-08-19-real-remote-playback"
 title: "Triage: real remote YouTube playback"
-status: dev-complete
+status: done
 workflow_mode: turbo
 triage: true
 priority: P0

@@ -1,0 +1,35 @@
+{
+  "version": "1.0",
+  "transition": "dev-complete->done",
+  "task_path": "/Users/geoffmccaleb/bkgrnd/tasks/dev-complete/triage-2026-08-19-real-remote-playback",
+  "workflow_mode": "turbo",
+  "bypass_questions": "forbidden",
+  "prerequisites": [
+    {
+      "predicate": "deployment_attempt_recorded",
+      "owner": "github-orchestrator",
+      "command": "handoff github-orchestrator with exact commit and scope"
+    },
+    {
+      "predicate": "ci_monitor_passed",
+      "owner": "scripts/ensure-ci-monitor.sh|scripts/ci-monitor.sh",
+      "command": "attach or start the configured free CI monitor and wait for result.json"
+    },
+    {
+      "predicate": "production_behavior_verified",
+      "owner": "scripts/verify-production.sh",
+      "command": "bash ~/.hosaka/scripts/verify-production.sh \"/Users/geoffmccaleb/bkgrnd/tasks/dev-complete/triage-2026-08-19-real-remote-playback\""
+    },
+    {
+      "predicate": "production_acceptance_passed",
+      "owner": "scripts/run-acceptance-tests.sh",
+      "command": "bash ~/.hosaka/scripts/run-acceptance-tests.sh --task \"/Users/geoffmccaleb/bkgrnd/tasks/dev-complete/triage-2026-08-19-real-remote-playback\" --env production"
+    },
+    {
+      "predicate": "delivery_report_valid",
+      "owner": "scripts/validate-delivery-report.sh",
+      "command": "bash ~/.hosaka/scripts/validate-delivery-report.sh \"/Users/geoffmccaleb/bkgrnd/tasks/dev-complete/triage-2026-08-19-real-remote-playback\""
+    }
+  ],
+  "generated_by": "hosaka-gate-plan.sh"
+}

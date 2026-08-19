@@ -1,0 +1,52 @@
+{
+  "version": "1.0",
+  "timestamp": "2026-08-19T20:42:59Z",
+  "task_id": "triage-2026-08-19-real-remote-playback",
+  "generated_by": "github-orchestrator",
+  "verdict": "PASS",
+  "status": "completed",
+  "conclusion": "success",
+  "repository": "bedlamlabs/bkgrnd",
+  "branch": "main",
+  "implementation_commit": "2e830716c02d600526fdc0d6780554b716698e27",
+  "task_deployment_path": {
+    "repository": "bedlamlabs/bkgrnd",
+    "branch": "main",
+    "implementation_commit": "2e830716c02d600526fdc0d6780554b716698e27",
+    "deploy_run": {
+      "provider": "github_actions",
+      "workflow": "Rust tests (macOS)",
+      "run_id": 32299783834,
+      "url": "https://github.com/bedlamlabs/bkgrnd/actions/runs/32299783834",
+      "status": "completed",
+      "conclusion": "success",
+      "head_sha": "2e830716c02d600526fdc0d6780554b716698e27"
+    }
+  },
+  "observed_facts": {
+    "push": {
+      "status": "success",
+      "branch": "main",
+      "from_sha": "138abea47d9ebcde44104da61f694e6ac6ae325a",
+      "to_sha": "2e830716c02d600526fdc0d6780554b716698e27",
+      "remote_head_confirmed": true
+    },
+    "ci": {
+      "run_id": 32299783834,
+      "status": "completed",
+      "conclusion": "success",
+      "job": "Tauri Rust tests",
+      "job_conclusion": "success",
+      "completed_at": "2026-08-19T20:42:21Z"
+    },
+    "production_probe_precondition": {
+      "installed_app_state": "idle",
+      "is_playing": false,
+      "checked_at": "2026-08-19T20:42:59Z"
+    }
+  },
+  "evidence": {
+    "monitor_result": "tasks/dev-complete/triage-2026-08-19-real-remote-playback/evidence/monitor-result.json",
+    "ci_result": "tasks/dev-complete/triage-2026-08-19-real-remote-playback/evidence/result.json"
+  }
+}
