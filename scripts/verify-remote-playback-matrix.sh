@@ -94,8 +94,30 @@ stop_app() {
   return 1
 }
 
+clear_test_playback() {
+  local body code state playing
+  body='{"action":"stop"}'
+  for _ in {1..12}; do
+    code="$(curl -sS --max-time 5 -o /dev/null -w '%{http_code}' -X POST \
+      -H "Authorization: Bearer $token" -H 'Content-Type: application/json' \
+      --data "$body" "$api/local/commands" 2>/dev/null || true)"
+    [[ "$code" == 200 ]] && break
+    [[ "$code" == 409 ]] || return 0
+    sleep 0.5
+  done
+  [[ "$code" == 200 ]] || return 0
+
+  for _ in {1..40}; do
+    state="$(read_status || true)"
+    playing="$(jq -r '.status.isPlaying // false' <<<"$state" 2>/dev/null || echo false)"
+    [[ "$playing" == false ]] && return 0
+    sleep 0.25
+  done
+}
+
 restore_normal_app() {
   trap - EXIT
+  clear_test_playback || true
   stop_app || true
   open -a /Applications/bkgrnd.app >/dev/null 2>&1 || true
 }
