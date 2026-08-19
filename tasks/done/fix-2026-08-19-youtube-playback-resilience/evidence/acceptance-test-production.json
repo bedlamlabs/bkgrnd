@@ -1,6 +1,6 @@
 {
   "version": "1.0",
-  "timestamp": "2026-08-19T18:08:30Z",
+  "timestamp": "2026-08-19T19:10:15Z",
   "task_dir": "fix-2026-08-19-youtube-playback-resilience",
   "environment": "production",
   "generated_by": "run-acceptance-tests.sh",
@@ -25,7 +25,7 @@
       "fallback_used": false,
       "exercised_routes": [],
       "artifact": "",
-      "duration_ms": 31000
+      "duration_ms": 23000
     },
     {
       "id": "AT-2",
@@ -34,7 +34,7 @@
       "cmd": "bash scripts/verify-youtube-playback.sh --soak-seconds 95",
       "expect": "contains \"AT-2 PASS\"",
       "actual_exit": 0,
-      "stdout_snippet": "AT-2 PASS: installed app recovered a forced POT stall through web-embedded, then an unforced real live stream advanced 95s during the 95s soak",
+      "stdout_snippet": "AT-2 PASS: installed app recovered a forced POT stall through web-embedded, then an unforced real live stream advanced 94.9993s during the 95s soak",
       "pass": true,
       "status": "PASS",
       "tools_tried": 1,
@@ -42,7 +42,7 @@
       "fallback_used": false,
       "exercised_routes": [],
       "artifact": "",
-      "duration_ms": 222000
+      "duration_ms": 218000
     },
     {
       "id": "AT-3",

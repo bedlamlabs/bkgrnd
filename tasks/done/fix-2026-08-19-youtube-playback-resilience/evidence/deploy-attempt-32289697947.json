@@ -1,0 +1,62 @@
+{
+  "version": "1.0",
+  "timestamp": "2026-08-19T18:59:51Z",
+  "task_id": "fix-2026-08-19-youtube-playback-resilience",
+  "generated_by": "github-orchestrator",
+  "verdict": "PASS",
+  "status": "completed",
+  "conclusion": "success",
+  "repository": "bedlamlabs/bkgrnd",
+  "branch": "main",
+  "implementation_commit": "670e24d29755c95b69d9e2392629edb07712ab98",
+  "final_ci_workflow_commit": "8f1a4dffd707d01788e9ece0c2cb52ea0dd37359",
+  "task_deployment_path": {
+    "repository": "bedlamlabs/bkgrnd",
+    "branch": "main",
+    "implementation_commit": "670e24d29755c95b69d9e2392629edb07712ab98",
+    "deploy_run": {
+      "provider": "github_actions",
+      "workflow": "Rust tests (macOS)",
+      "run_id": 32289697947,
+      "url": "https://github.com/bedlamlabs/bkgrnd/actions/runs/32289697947",
+      "status": "completed",
+      "conclusion": "success",
+      "head_sha": "8f1a4dffd707d01788e9ece0c2cb52ea0dd37359"
+    }
+  },
+  "observed_facts": {
+    "implementation_push": {
+      "status": "success",
+      "branch": "main",
+      "from_sha": "73440930a464a0f445b3f9f4dfe885e179340c2b",
+      "to_sha": "670e24d29755c95b69d9e2392629edb07712ab98"
+    },
+    "final_ci_push": {
+      "status": "success",
+      "branch": "main",
+      "head_sha": "8f1a4dffd707d01788e9ece0c2cb52ea0dd37359",
+      "remote_head_confirmed": true
+    },
+    "ci": {
+      "run_id": 32289697947,
+      "status": "completed",
+      "conclusion": "success",
+      "job": "Tauri Rust tests",
+      "job_conclusion": "success",
+      "completed_at": "2026-08-19T18:53:14Z"
+    },
+    "installed_application": {
+      "deployment_status": "deployed",
+      "production_verification": "PASS",
+      "production_verification_timestamp": "2026-08-19T18:53:54Z",
+      "production_acceptance_passed": 3,
+      "production_acceptance_total": 3,
+      "production_acceptance_timestamp": "2026-08-19T18:57:54Z"
+    }
+  },
+  "evidence": {
+    "monitor_result": "tasks/dev-complete/fix-2026-08-19-youtube-playback-resilience/evidence/monitor-result.json",
+    "production_verification": "tasks/dev-complete/fix-2026-08-19-youtube-playback-resilience/evidence/production-verification.json",
+    "acceptance_test_production": "tasks/dev-complete/fix-2026-08-19-youtube-playback-resilience/evidence/acceptance-test-production.json"
+  }
+}

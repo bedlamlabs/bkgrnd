@@ -1,0 +1,12 @@
+{
+  "gate": "DEPLOY",
+  "timestamp": "2026-08-19T19:10:16Z",
+  "task_id": "fix-2026-08-19-youtube-playback-resilience",
+  "task_title": "YouTube playback resilience hotfix",
+  "agent_model": "hosaka-gate.sh",
+  "summary": "Validated deployment complete, CI passed, production verified, and ship summary valid",
+  "transition": "dev-complete->done",
+  "decisions": [],
+  "skipped_checks": [],
+  "source_artifacts": ["dev-complete/fix-2026-08-19-youtube-playback-resilience/task.yaml"]
+}

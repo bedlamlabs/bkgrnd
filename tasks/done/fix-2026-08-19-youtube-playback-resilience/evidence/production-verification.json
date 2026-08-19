@@ -1,0 +1,42 @@
+{
+  "version": "1.0",
+  "timestamp": "2026-08-19T18:53:54Z",
+  "task_dir": "fix-2026-08-19-youtube-playback-resilience",
+  "production_url": "https://bkgrnd.bedl.am",
+  "verdict": "PASS",
+  "total_checks": 4,
+  "passed": 4,
+  "failed": 0,
+  "generated_by": "verify-production.sh",
+  "script_hash": "368d4e655234a3ea23136ca2f3428da945972ec5f858d0b02726f0636812bb8a",
+  "checks": [
+    {
+      "type": "health",
+      "target": "https://bkgrnd.bedl.am/api/v1/health",
+      "method": "curl",
+      "status": "PASS",
+      "detail": "HTTP 200"
+    },
+    {
+      "type": "acceptance_test",
+      "target": "acceptance:AT-1",
+      "method": "bash",
+      "status": "PASS",
+      "detail": "PASS: bash scripts/verify-youtube-playback.sh --startup-only"
+    },
+    {
+      "type": "acceptance_test",
+      "target": "acceptance:AT-2",
+      "method": "bash",
+      "status": "PASS",
+      "detail": "PASS: bash scripts/verify-youtube-playback.sh --soak-seconds 95"
+    },
+    {
+      "type": "acceptance_test",
+      "target": "acceptance:AT-3",
+      "method": "bash",
+      "status": "PASS",
+      "detail": "PASS: pgrep -f 'Applications.*bkgrnd.app.*Contents.*MacOS.*bkgrnd' >/dev/null && echo 'AT-3 PASS'"
+    }
+  ]
+}

@@ -5,6 +5,11 @@
     "task_id": "fix-2026-08-19-youtube-playback-resilience"
   },
   {
+    "gate": "DEPLOY",
+    "timestamp": "2026-08-19T19:10:16Z",
+    "task_id": "fix-2026-08-19-youtube-playback-resilience"
+  },
+  {
     "gate": "QA",
     "timestamp": "2026-08-19T18:34:45Z",
     "task_id": "fix-2026-08-19-youtube-playback-resilience"

@@ -1,0 +1,200 @@
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:01.8097410Z [1m[92m   Compiling[0m toml v0.9.12+spec-1.1.0
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:01.8217520Z [1m[92m   Compiling[0m brotli v8.0.2
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:02.2804120Z [1m[92m   Compiling[0m phf v0.10.1
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:02.3748290Z [1m[92m   Compiling[0m uuid v1.22.0
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:02.6974180Z [1m[92m   Compiling[0m selectors v0.24.0
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:03.3111790Z [1m[92m   Compiling[0m string_cache v0.8.9
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:03.4824070Z [1m[92m   Compiling[0m idna v1.1.0
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:04.5232530Z [1m[92m   Compiling[0m phf v0.11.3
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:04.6297540Z [1m[92m   Compiling[0m indexmap v1.9.3
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:04.7921670Z [1m[92m   Compiling[0m objc2-exception-helper v0.1.1
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:04.8588930Z [1m[92m   Compiling[0m cssparser-macros v0.6.1
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:04.8724510Z [1m[92m   Compiling[0m ctor v0.2.9
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:04.9605270Z [1m[92m   Compiling[0m glob v0.3.3
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:05.1396010Z [1m[92m   Compiling[0m nodrop v0.1.14
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:05.2115940Z [1m[92m   Compiling[0m camino v1.2.2
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:05.2419580Z [1m[92m   Compiling[0m matches v0.1.10
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:05.2932700Z [1m[92m   Compiling[0m convert_case v0.4.0
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:05.5343620Z [1m[92m   Compiling[0m servo_arc v0.2.0
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:05.6282800Z [1m[92m   Compiling[0m derive_more v0.99.20
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:06.8898680Z [1m[92m   Compiling[0m url v2.5.8
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:07.9867770Z [1m[92m   Compiling[0m swift-rs v1.0.7
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:08.4442610Z [1m[92m   Compiling[0m phf v0.8.0
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:08.4772650Z [1m[92m   Compiling[0m fxhash v0.2.1
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:08.5499310Z [1m[92m   Compiling[0m match_token v0.1.0
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:08.5559790Z [1m[92m   Compiling[0m serde_derive_internals v0.29.1
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:08.5739380Z [1m[92m   Compiling[0m hashbrown v0.12.3
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:08.9324470Z [1m[92m   Compiling[0m schemars v0.8.22
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:09.0811190Z [1m[92m   Compiling[0m html5ever v0.29.1
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:09.3622020Z [1m[92m   Compiling[0m schemars_derive v0.8.22
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:09.8779750Z [1m[92m   Compiling[0m cfb v0.7.3
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:10.0136770Z [1m[92m   Compiling[0m jsonptr v0.6.3
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:10.4799410Z [1m[92m   Compiling[0m cargo-platform v0.1.9
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:10.6222980Z [1m[92m   Compiling[0m dyn-clone v1.0.20
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:10.6684760Z [1m[92m   Compiling[0m objc2 v0.6.4
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:10.6752140Z [1m[92m   Compiling[0m base64 v0.21.7
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:10.8409450Z [1m[92m   Compiling[0m cargo_metadata v0.19.2
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:11.2772560Z [1m[92m   Compiling[0m serde-untagged v0.1.9
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:11.4500160Z [1m[92m   Compiling[0m infer v0.19.0
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:11.8996030Z [1m[92m   Compiling[0m json-patch v3.0.1
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:12.0485080Z [1m[92m   Compiling[0m kuchikiki v0.8.8-speedreader
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:12.2574580Z [1m[92m   Compiling[0m urlpattern v0.3.0
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:12.4043830Z [1m[92m   Compiling[0m serde_with v3.18.0
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:12.5672330Z [1m[92m   Compiling[0m objc2-encode v4.1.0
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:12.9533060Z [1m[92m   Compiling[0m base64 v0.22.1
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:13.2439680Z [1m[92m   Compiling[0m version_check v0.9.5
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:13.6325600Z [1m[92m   Compiling[0m errno v0.3.14
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:13.7346740Z [1m[92m   Compiling[0m once_cell v1.21.4
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:14.0251720Z [1m[92m   Compiling[0m tauri-utils v2.8.3
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:14.0341510Z [1m[92m   Compiling[0m signal-hook-registry v1.4.8
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:15.0076440Z [1m[92m   Compiling[0m pin-project-lite v0.2.17
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:15.3633380Z [1m[92m   Compiling[0m quick-xml v0.38.4
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:15.9705590Z [1m[92m   Compiling[0m option-ext v0.2.0
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:16.0140950Z [1m[92m   Compiling[0m dirs-sys v0.5.0
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:16.0924870Z [1m[92m   Compiling[0m block2 v0.6.2
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:16.3096260Z [1m[92m   Compiling[0m objc2-core-foundation v0.3.2
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:16.3355650Z [1m[92m   Compiling[0m time v0.3.47
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:17.5114640Z [1m[92m   Compiling[0m simd-adler32 v0.3.8
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:17.6530950Z [1m[92m   Compiling[0m crc32fast v1.5.0
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:18.0332930Z [1m[92m   Compiling[0m plist v1.8.0
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:18.3918200Z [1m[92m   Compiling[0m dirs v6.0.0
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:20.8039960Z [1m[92m   Compiling[0m rustc_version v0.4.1
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:21.0499520Z [1m[92m   Compiling[0m mio v1.1.1
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:21.0621190Z [1m[92m   Compiling[0m socket2 v0.6.3
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:21.5178810Z [1m[92m   Compiling[0m adler2 v2.0.1
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:21.5946560Z [1m[92m   Compiling[0m miniz_oxide v0.8.9
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:21.7049670Z [1m[92m   Compiling[0m tokio v1.50.0
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:22.4675280Z [1m[92m   Compiling[0m embed-resource v3.0.7
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:23.0318740Z [1m[92m   Compiling[0m objc2-foundation v0.3.2
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:30.1549590Z [1m[92m   Compiling[0m heck v0.5.0
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:30.7507550Z [1m[92m   Compiling[0m typenum v1.19.0
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:31.2550190Z [1m[92m   Compiling[0m objc2-app-kit v0.3.2
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:31.2657760Z [1m[92m   Compiling[0m flate2 v1.1.9
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:32.2133400Z [1m[92m   Compiling[0m tauri-winres v0.3.5
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:32.5982830Z [1m[92m   Compiling[0m fdeflate v0.3.7
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:33.2186590Z [1m[92m   Compiling[0m generic-array v0.14.7
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:33.2300220Z [1m[92m   Compiling[0m cargo_toml v0.22.3
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:33.5079070Z [1m[92m   Compiling[0m futures-core v0.3.32
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:35.1132810Z [1m[92m   Compiling[0m tauri-build v2.5.6
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:37.4502490Z [1m[92m   Compiling[0m crossbeam-utils v0.8.21
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:38.2643390Z [1m[92m   Compiling[0m tauri-plugin v2.5.4
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:38.4828820Z [1m[92m   Compiling[0m dpi v0.1.2
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:39.0075780Z [1m[92m   Compiling[0m time-macros v0.2.27
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:39.6818410Z [1m[92m   Compiling[0m tauri v2.10.3
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:41.1769850Z [1m[92m   Compiling[0m png v0.17.16
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:41.4489700Z [1m[92m   Compiling[0m cookie v0.18.1
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:42.1217080Z [1m[92m   Compiling[0m core-foundation-sys v0.8.7
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:42.4063420Z [1m[92m   Compiling[0m raw-window-handle v0.6.2
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:42.7288100Z [1m[92m   Compiling[0m core-foundation v0.10.1
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:43.2865730Z [1m[92m   Compiling[0m crossbeam-channel v0.5.15
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:43.4317100Z [1m[92m   Compiling[0m crypto-common v0.1.7
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:43.5449900Z [1m[92m   Compiling[0m block-buffer v0.10.4
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:44.0222320Z [1m[92m   Compiling[0m num-traits v0.2.19
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:44.3273830Z [1m[92m   Compiling[0m ring v0.17.14
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:44.4234110Z [1m[92m   Compiling[0m foreign-types-macros v0.2.3
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:44.9863130Z [1m[92m   Compiling[0m foreign-types-shared v0.3.1
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:45.1080480Z [1m[92m   Compiling[0m slab v0.4.12
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:45.2021250Z [1m[92m   Compiling[0m foreign-types v0.5.0
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:47.1788980Z [1m[92m   Compiling[0m digest v0.10.7
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:47.3362370Z [1m[92m   Compiling[0m core-graphics-types v0.2.0
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:47.5173490Z [1m[92m   Compiling[0m objc2-web-kit v0.3.2
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:48.6899540Z [1m[92m   Compiling[0m cpufeatures v0.2.17
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:49.1664420Z [1m[92m   Compiling[0m unicode-segmentation v1.12.0
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:49.4335110Z [1m[92m   Compiling[0m zeroize v1.8.2
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:49.5756570Z [1m[92m   Compiling[0m wry v0.54.4
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:49.5868230Z [1m[92m   Compiling[0m tauri-runtime v2.10.1
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:49.8475180Z [1m[92m   Compiling[0m rustls-pki-types v1.14.1
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:49.9079190Z [1m[92m   Compiling[0m keyboard-types v0.7.0
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:50.3534870Z [1m[92m   Compiling[0m sha2 v0.10.9
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:50.5944560Z [1m[92m   Compiling[0m core-graphics v0.25.0
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:51.2413130Z [1m[92m   Compiling[0m ico v0.5.0
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:51.7414810Z [1m[92m   Compiling[0m dispatch2 v0.3.1
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:51.8674380Z [1m[92m   Compiling[0m tracing-core v0.1.36
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:52.1423540Z [1m[92m   Compiling[0m http-body v1.0.1
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:52.3758010Z [1m[92m   Compiling[0m pxfm v0.1.28
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:52.5250210Z [1m[92m   Compiling[0m httparse v1.10.1
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:52.8578300Z [1m[92m   Compiling[0m futures-sink v0.3.32
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:52.9293060Z [1m[92m   Compiling[0m untrusted v0.9.0
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:53.0017530Z [1m[92m   Compiling[0m getrandom v0.3.4
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:53.3040640Z [1m[92m   Compiling[0m tauri-runtime-wry v2.10.1
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:53.5232530Z [1m[92m   Compiling[0m futures-task v0.3.32
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:53.6542250Z [1m[92m   Compiling[0m futures-util v0.3.32
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:55.7020590Z [1m[92m   Compiling[0m moxcms v0.8.1
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:46:59.4095680Z [1m[92m   Compiling[0m tokio-util v0.7.18
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:47:00.3106960Z [1m[92m   Compiling[0m tracing v0.1.44
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:47:00.6209140Z [1m[92m   Compiling[0m tao v0.34.6
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:47:03.1532650Z [1m[92m   Compiling[0m tauri-codegen v2.5.5
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:47:03.5753220Z [1m[92m   Compiling[0m muda v0.17.1
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:47:05.4677630Z [1m[92m   Compiling[0m png v0.18.1
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:47:05.6667750Z [1m[92m   Compiling[0m objc2-core-graphics v0.3.2
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:47:05.8075310Z [1m[92m   Compiling[0m serialize-to-javascript-impl v0.1.2
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:47:06.1441620Z [1m[92m   Compiling[0m atomic-waker v1.1.2
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:47:06.2186600Z [1m[92m   Compiling[0m byteorder-lite v0.1.0
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:47:06.4614950Z [1m[92m   Compiling[0m try-lock v0.2.5
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:47:06.5141430Z [1m[92m   Compiling[0m bytemuck v1.25.0
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:47:06.7715630Z [1m[92m   Compiling[0m rustls v0.23.40
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:47:06.8952020Z [1m[92m   Compiling[0m signal-hook v0.3.18
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:47:07.0387280Z [1m[92m   Compiling[0m tower-service v0.3.3
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:47:07.1397730Z [1m[92m   Compiling[0m image v0.25.10
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:47:07.4595910Z [1m[92m   Compiling[0m want v0.3.1
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:47:07.8602720Z [1m[92m   Compiling[0m h2 v0.4.14
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:47:08.6043110Z [1m[92m   Compiling[0m serialize-to-javascript v0.1.2
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:47:08.7094950Z [1m[92m   Compiling[0m tray-icon v0.21.3
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:47:09.3586020Z [1m[92m   Compiling[0m tauri-macros v2.5.5
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:47:10.8974510Z [1m[92m   Compiling[0m rustls-webpki v0.103.13
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:47:11.6767700Z [1m[92m   Compiling[0m window-vibrancy v0.6.0
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:47:11.9860730Z [1m[92m   Compiling[0m futures-channel v0.3.32
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:47:12.1098060Z [1m[92m   Compiling[0m serde_repr v0.1.20
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:47:12.4129490Z [1m[92m   Compiling[0m mime v0.3.17
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:47:12.4543090Z [1m[92m   Compiling[0m embed_plist v1.2.2
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:47:12.4885740Z [1m[92m   Compiling[0m pin-utils v0.1.0
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:47:12.5289420Z [1m[92m   Compiling[0m subtle v2.6.1
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:47:12.6454350Z [1m[92m   Compiling[0m hyper v1.8.1
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:47:14.3161660Z [1m[92m   Compiling[0m tauri-plugin-process v2.3.1
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:47:14.7659050Z [1m[92m   Compiling[0m tauri-plugin-positioner v2.3.1
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:47:15.2954560Z [1m[92m   Compiling[0m tauri-plugin-shell v2.3.5
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:47:16.0633050Z [1m[92m   Compiling[0m sync_wrapper v1.0.2
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:47:16.1617850Z [1m[92m   Compiling[0m os_pipe v1.2.3
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:47:16.2858430Z [1m[92m   Compiling[0m ryu v1.0.23
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:47:16.4617690Z [1m[92m   Compiling[0m tower-layer v0.3.3
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:47:16.6555580Z [1m[92m   Compiling[0m ipnet v2.12.0
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:47:17.2224920Z [1m[92m   Compiling[0m hyper-util v0.1.20
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:47:19.0267550Z [1m[92m   Compiling[0m tower v0.5.3
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:47:19.5329230Z [1m[92m   Compiling[0m sigchld v0.2.4
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:47:19.6286550Z [1m[92m   Compiling[0m tokio-rustls v0.26.4
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:47:19.9498230Z [1m[92m   Compiling[0m webpki-roots v1.0.7
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:47:20.0221590Z [1m[92m   Compiling[0m iri-string v0.7.10
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:47:20.0642040Z [1m[92m   Compiling[0m pathdiff v0.2.3
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:47:20.1140060Z [1m[92m   Compiling[0m open v5.3.3
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:47:20.2441880Z [1m[92m   Compiling[0m hyper-rustls v0.27.9
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:47:20.4980620Z [1m[92m   Compiling[0m shared_child v1.1.1
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:47:20.7014930Z [1m[92m   Compiling[0m serde_urlencoded v0.7.1
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:47:20.9281940Z [1m[92m   Compiling[0m http-body-util v0.1.3
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:47:21.1350670Z [1m[92m   Compiling[0m bkgrnd v1.0.0 (/Users/runner/work/bkgrnd/bkgrnd/src-tauri)
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:47:21.7494420Z [1m[92m   Compiling[0m tower-http v0.6.8
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:47:22.0694590Z [1m[92m   Compiling[0m encoding_rs v0.8.35
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:47:22.2701150Z [1m[92m   Compiling[0m unsafe-libyaml v0.2.11
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:47:23.8973630Z [1m[92m   Compiling[0m serde_yaml v0.9.34+deprecated
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:47:24.3380720Z [1m[92m   Compiling[0m reqwest v0.12.28
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:47:25.2423070Z [1m[91merror[0m: failed to run custom build command for `bkgrnd v1.0.0 (/Users/runner/work/bkgrnd/bkgrnd/src-tauri)`
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:47:25.2536220Z 
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:47:25.2606260Z Caused by:
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:47:25.2607410Z   process didn't exit successfully: `/Users/runner/work/bkgrnd/bkgrnd/src-tauri/target/debug/build/bkgrnd-68332325be2d4cb3/build-script-build` (exit status: 1)
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:47:25.2608350Z   --- stdout
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:47:25.2608710Z   cargo:rerun-if-env-changed=TAURI_CONFIG
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:47:25.2609080Z   cargo:rustc-check-cfg=cfg(desktop)
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:47:25.2609560Z   cargo:rustc-cfg=desktop
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:47:25.2609910Z   cargo:rustc-check-cfg=cfg(mobile)
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:47:25.2615340Z   cargo:rerun-if-changed=/Users/runner/work/bkgrnd/bkgrnd/src-tauri/tauri.conf.json
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:47:25.2616760Z   cargo:rustc-env=TAURI_ANDROID_PACKAGE_NAME_APP_NAME=bkgrnd
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:47:25.2629500Z   cargo:rustc-env=TAURI_ANDROID_PACKAGE_NAME_PREFIX=com_bedlamlabs
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:47:25.2630200Z   cargo:rustc-check-cfg=cfg(dev)
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:47:25.2630550Z   cargo:rustc-cfg=dev
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:47:25.2631410Z   cargo:PERMISSION_FILES_PATH=/Users/runner/work/bkgrnd/bkgrnd/src-tauri/target/debug/build/bkgrnd-abb544e24e97dfcb/out/app-manifest/__app__-permission-files
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:47:25.2639250Z   cargo:rerun-if-changed=capabilities
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:47:25.2640420Z   cargo:rerun-if-env-changed=REMOVE_UNUSED_COMMANDS
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:47:25.2641300Z   cargo:rustc-env=TAURI_ENV_TARGET_TRIPLE=aarch64-apple-darwin
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:47:25.2641830Z   cargo:rerun-if-changed=binaries/yt-dlp-aarch64-apple-darwin
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:47:25.2642290Z   glob pattern binaries/mpv-bundle/* path not found or didn't match any files.
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:47:25.2643090Z [1m[33mwarning[0m: build failed, waiting for other jobs to finish...
+Tauri Rust tests	Run Tauri Rust tests	2026-08-19T18:47:27.2621470Z ##[error]Process completed with exit code 101.

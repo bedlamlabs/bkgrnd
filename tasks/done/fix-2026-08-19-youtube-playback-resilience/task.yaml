@@ -1,7 +1,7 @@
 id: "fix-2026-08-19-youtube-playback-resilience"
 title: "YouTube playback resilience hotfix"
 priority: P0
-status: dev-complete
+status: done
 project: bkgrnd
 created_at: "2026-08-19"
 updated_at: "2026-08-19"
@@ -80,3 +80,6 @@ red_tdd:
 baseline_hashes:
   "youtube-playback-resilience.test.sh": "efd8a665f8f5c9923736b6f0c7cf8fe4b7426489a5b171cf78688c1f3d30e7af"
 external_blockers: []
+
+production_verification_spec:
+  base_url: "https://bkgrnd.bedl.am"
