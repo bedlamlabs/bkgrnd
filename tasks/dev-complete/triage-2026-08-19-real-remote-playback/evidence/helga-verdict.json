@@ -1,0 +1,31 @@
+{
+  "task_dir": "triage-2026-08-19-real-remote-playback",
+  "verdict": "PASS",
+  "gate": null,
+  "reason": "All relevant code snippets and scripts align with the task's requirements, indicating successful implementation of remote YouTube playback functionality.",
+  "tools_used": [
+    "test_runner",
+    "code_search",
+    "file_read"
+  ],
+  "tool_types_count": 3,
+  "turns": 4,
+  "elapsed_seconds": 93.1,
+  "total_tokens": 36708,
+  "investigation_log": [
+    "cat /Users/geoffmccaleb/bkgrnd/tasks/code-complete/triage-2026-08-19-real-remote-playback/spec.md",
+    "bash /Users/geoffmccaleb/bkgrnd/tasks/code-complete/triage-2026-08-19-real-remote-playback/tests/real-remote-playback.test.sh",
+    "rg -n 'Triage|real|remote|YouTube|playback|Correct|prior|delivery|arbitrary|remote\\-controlled|videos|only' /Users/geoffmccaleb/bkgrnd/src-tauri/src/player.rs /Users/geoffmccaleb/bkgrnd/src-tauri/src/mpv.rs /Users/geoffmccaleb/bkgrnd/src-tauri/src/wopr_sync.rs /Users/geoffmccaleb/bkgrnd/scripts/verify-youtube-playback.sh /Users/geoffmccaleb/bkgrnd/scripts/verify-remote-playback-matrix.sh",
+    "PARSE_ERROR",
+    "PARSE_ERROR",
+    "PARSE_ERROR",
+    "PARSE_ERROR"
+  ],
+  "reject_reason_code": null,
+  "project": "bkgrnd",
+  "profile_used": "webapp",
+  "original_verdict": "PASS",
+  "timestamp": "2026-08-19T20:25:24Z",
+  "generated_by": "helga-gate.sh",
+  "runner_hash": "427f25cfcf59750bd43ec9057859f79c005908ed1728fc4d7445c076a91bc023"
+}

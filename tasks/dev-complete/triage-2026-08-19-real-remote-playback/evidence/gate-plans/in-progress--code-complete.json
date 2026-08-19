@@ -1,0 +1,20 @@
+{
+  "version": "1.0",
+  "transition": "in-progress->code-complete",
+  "task_path": "/Users/geoffmccaleb/bkgrnd/tasks/in-progress/triage-2026-08-19-real-remote-playback",
+  "workflow_mode": "turbo",
+  "bypass_questions": "forbidden",
+  "prerequisites": [
+    {
+      "predicate": "localhost_behavior_verified",
+      "owner": "scripts/verify-localhost.sh",
+      "command": "bash ~/.hosaka/scripts/verify-localhost.sh \"/Users/geoffmccaleb/bkgrnd/tasks/in-progress/triage-2026-08-19-real-remote-playback\""
+    },
+    {
+      "predicate": "peer_review_complete",
+      "owner": "scripts/hosaka-review-runner.sh",
+      "command": "bash ~/.hosaka/scripts/hosaka-review-runner.sh \"/Users/geoffmccaleb/bkgrnd/tasks/in-progress/triage-2026-08-19-real-remote-playback\""
+    }
+  ],
+  "generated_by": "hosaka-gate-plan.sh"
+}

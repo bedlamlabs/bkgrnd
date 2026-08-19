@@ -1,0 +1,40 @@
+{
+  "version": "1.0",
+  "timestamp": "2026-08-19T20:23:25Z",
+  "task_dir": "triage-2026-08-19-real-remote-playback",
+  "base_url": "http://localhost:5001",
+  "verdict": "PASS",
+  "total_checks": 2,
+  "passed": 2,
+  "failed": 0,
+  "generated_by": "verify-localhost.sh",
+  "script_hash": "3bcdf102650163698a1590acf1ac59f3a8ab6d5993c9b1903167b27b3548f822",
+  "blast_radius": {
+    "changed_client_files": 0,
+    "declared_routes": 0,
+    "warning": false
+  },
+  "checks": [
+    {
+      "type": "health",
+      "target": "http://localhost:5001/api/health",
+      "method": "curl",
+      "status": "PASS",
+      "detail": "HTTP 200",
+      "result": "PASS"
+    },
+    {
+      "type": "acceptance_tests",
+      "target": "run-acceptance-tests.sh",
+      "method": "bash",
+      "status": "PASS",
+      "detail": "All acceptance tests passed",
+      "result": "PASS"
+    }
+  ],
+  "investigation_log": [
+    "verify-localhost.sh executed the following tool invocations:",
+    "curl http://localhost:5001/api/health -> PASS",
+    "bash run-acceptance-tests.sh (run-acceptance-tests.sh) -> PASS"
+  ]
+}

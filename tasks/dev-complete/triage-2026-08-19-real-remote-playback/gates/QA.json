@@ -1,0 +1,12 @@
+{
+  "gate": "QA",
+  "timestamp": "2026-08-19T20:25:27Z",
+  "task_id": "triage-2026-08-19-real-remote-playback",
+  "task_title": "Triage: real remote YouTube playback",
+  "agent_model": "hosaka-gate.sh",
+  "summary": "Validated QA pass before promoting to dev-complete",
+  "transition": "code-complete->dev-complete",
+  "decisions": [],
+  "skipped_checks": ["hosaka-verify.sh QA (Helga PASS)"],
+  "source_artifacts": ["code-complete/triage-2026-08-19-real-remote-playback/task.yaml"]
+}

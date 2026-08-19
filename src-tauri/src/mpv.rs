@@ -205,7 +205,7 @@ pub async fn mpv_command(
     }
 }
 
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub struct StatusSnapshot {
     pub paused: bool,
     pub position: Option<f64>,
@@ -214,14 +214,27 @@ pub struct StatusSnapshot {
     pub core_idle: bool,
 }
 
+impl Default for StatusSnapshot {
+    fn default() -> Self {
+        Self {
+            paused: false,
+            position: None,
+            duration: None,
+            buffering: false,
+            // An unavailable/partial status response must never look ready.
+            core_idle: true,
+        }
+    }
+}
+
 /// Read playback state over ONE IPC connection. Status is polled
 /// every 1-2s by both the popover and the WOPR sync loop; three separate
 /// connects per poll (each with its own 3s timeout) made a wedged mpv stall
 /// callers for ~9s.
-pub async fn status_snapshot(ipc_path: &str) -> StatusSnapshot {
-    let Ok(stream) = connect_ipc(ipc_path).await else {
-        return StatusSnapshot::default();
-    };
+pub async fn status_snapshot_checked(ipc_path: &str) -> Result<StatusSnapshot, String> {
+    let stream = connect_ipc(ipc_path)
+        .await
+        .map_err(|e| format!("mpv IPC connect failed: {}", e))?;
     let (reader, mut writer) = tokio::io::split(stream);
 
     let properties = [
@@ -240,13 +253,14 @@ pub async fn status_snapshot(ipc_path: &str) -> StatusSnapshot {
         request.push_str(&serde_json::to_string(&msg).unwrap());
         request.push('\n');
     }
-    if writer.write_all(request.as_bytes()).await.is_err() {
-        return StatusSnapshot::default();
-    }
+    writer
+        .write_all(request.as_bytes())
+        .await
+        .map_err(|e| format!("mpv IPC write failed: {}", e))?;
 
     let mut answers: [Option<serde_json::Value>; 5] = [None, None, None, None, None];
     let mut buf_reader = BufReader::new(reader);
-    let read_result = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
         let mut line = String::new();
         let mut received = 0usize;
         while received < properties.len() {
@@ -273,8 +287,8 @@ pub async fn status_snapshot(ipc_path: &str) -> StatusSnapshot {
             }
         }
     })
-    .await;
-    let _ = read_result;
+    .await
+    .map_err(|_| "mpv status IPC timeout".to_string())?;
 
     let number = |value: &Option<serde_json::Value>| {
         value
@@ -283,7 +297,7 @@ pub async fn status_snapshot(ipc_path: &str) -> StatusSnapshot {
             .filter(|v| v.is_finite())
     };
 
-    StatusSnapshot {
+    Ok(StatusSnapshot {
         paused: answers[0]
             .as_ref()
             .and_then(|v| v.as_bool())
@@ -297,8 +311,12 @@ pub async fn status_snapshot(ipc_path: &str) -> StatusSnapshot {
         core_idle: answers[4]
             .as_ref()
             .and_then(|v| v.as_bool())
-            .unwrap_or(false),
-    }
+            .unwrap_or(true),
+    })
+}
+
+pub async fn status_snapshot(ipc_path: &str) -> StatusSnapshot {
+    status_snapshot_checked(ipc_path).await.unwrap_or_default()
 }
 
 pub async fn pause(ipc_path: &str) -> Result<(), String> {

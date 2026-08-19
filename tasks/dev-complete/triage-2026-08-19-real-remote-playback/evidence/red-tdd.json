@@ -1,0 +1,44 @@
+{
+  "version": "1.0",
+  "timestamp": "2026-08-19T19:52:01Z",
+  "task_dir": "triage-2026-08-19-real-remote-playback",
+  "verdict": "FAIL_EXPECTED",
+  "generated_by": "run-red-tdd.sh",
+  "script_hash": "426e5d0a4a1fee749270f9605520a771cd6cf0c168118e7c2caab2a1513efab8",
+  "total": 1,
+  "failed_expected": 1,
+  "unexpected_pass": 0,
+  "harness_error": 0,
+  "required_cases": [
+    {
+      "id": "AT-1",
+      "type": "acceptance"
+    },
+    {
+      "id": "AT-2",
+      "type": "acceptance"
+    },
+    {
+      "id": "AT-3",
+      "type": "acceptance"
+    }
+  ],
+  "covered_cases": [
+    "AT-1",
+    "AT-2",
+    "AT-3"
+  ],
+  "missing_cases": [],
+  "results": [
+    {
+      "id": "RED-1",
+      "cmd": "bash tasks/in-progress/triage-2026-08-19-real-remote-playback/tests/real-remote-playback.test.sh",
+      "status": "FAIL_EXPECTED",
+      "exit_code": 1,
+      "output_snippet": "",
+      "log_file": "/Users/geoffmccaleb/bkgrnd/tasks/in-progress/triage-2026-08-19-real-remote-playback/evidence/red-tdd-RED-1.log",
+      "red_pass": true,
+      "duration_ms": 0
+    }
+  ]
+}

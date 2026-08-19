@@ -1,0 +1,12 @@
+{
+  "gate": "CODE_COMPLETE",
+  "timestamp": "2026-08-19T20:23:41Z",
+  "task_id": "triage-2026-08-19-real-remote-playback",
+  "task_title": "Triage: real remote YouTube playback",
+  "agent_model": "hosaka-gate.sh",
+  "summary": "Validated implementation complete, server running current code",
+  "transition": "in-progress->code-complete",
+  "decisions": [],
+  "skipped_checks": [],
+  "source_artifacts": ["in-progress/triage-2026-08-19-real-remote-playback/task.yaml"]
+}

@@ -290,6 +290,8 @@ async fn resolve_stream_info_with_strategies(
                 "%(channel,uploader)s".to_string(),
                 "--print".to_string(),
                 "%(duration)s".to_string(),
+                "--print".to_string(),
+                "%(available_at)s".to_string(),
                 "--get-url".to_string(),
             ];
             args.extend(strategy_args);
@@ -314,7 +316,10 @@ async fn resolve_stream_info_with_strategies(
 
             let stdout = String::from_utf8_lossy(&output.stdout);
             match parse_stream_info_output(&stdout, url, strategy) {
-                Ok(info) => return Ok(info),
+                Ok(parsed) => {
+                    wait_until_stream_available(parsed.available_at).await;
+                    return Ok(parsed.info);
+                }
                 Err(error) => {
                     eprintln!("[ytdlp] {} output invalid: {}", strategy.label(), error);
                     last_error = Some(error);
@@ -326,11 +331,17 @@ async fn resolve_stream_info_with_strategies(
     Err(last_error.unwrap_or_else(|| "YouTube did not return a playable stream URL.".to_string()))
 }
 
+#[derive(Debug)]
+struct ParsedStreamInfo {
+    info: StreamInfo,
+    available_at: Option<u64>,
+}
+
 fn parse_stream_info_output(
     stdout: &str,
     url: &str,
     strategy: ResolverStrategy,
-) -> Result<StreamInfo, String> {
+) -> Result<ParsedStreamInfo, String> {
     let mut lines = stdout.lines().filter(|line| !line.trim().is_empty());
     let title = lines.next().unwrap_or("Unknown").trim().to_string();
     let is_live = lines
@@ -348,6 +359,9 @@ fn parse_stream_info_output(
         .filter(|value| !value.is_empty() && !value.eq_ignore_ascii_case("none"))
         .unwrap_or_default();
     let duration = lines.next().and_then(parse_duration);
+    let available_at = lines
+        .next()
+        .and_then(|value| value.trim().parse::<u64>().ok());
     let stream_url = lines
         .find(|line| line.starts_with("http://") || line.starts_with("https://"))
         .map(str::trim)
@@ -361,15 +375,38 @@ fn parse_stream_info_output(
         ));
     }
 
-    Ok(StreamInfo {
-        stream_url,
-        title,
-        is_live,
-        video_id,
-        channel,
-        duration,
-        strategy,
+    Ok(ParsedStreamInfo {
+        info: StreamInfo {
+            stream_url,
+            title,
+            is_live,
+            video_id,
+            channel,
+            duration,
+            strategy,
+        },
+        available_at,
     })
+}
+
+fn stream_availability_delay(available_at: Option<u64>, now: u64) -> Option<std::time::Duration> {
+    const MAX_SITE_DELAY_SECONDS: u64 = 15;
+    let delay = available_at?.saturating_sub(now);
+    (delay > 0 && delay <= MAX_SITE_DELAY_SECONDS).then(|| std::time::Duration::from_secs(delay))
+}
+
+async fn wait_until_stream_available(available_at: Option<u64>) {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    if let Some(delay) = stream_availability_delay(available_at, now) {
+        eprintln!(
+            "[ytdlp] waiting {}s for the resolved stream to become available",
+            delay.as_secs()
+        );
+        tokio::time::sleep(delay).await;
+    }
 }
 
 fn parse_duration(value: &str) -> Option<f64> {
@@ -407,8 +444,8 @@ pub async fn search_resolve_first(
     let Some(result) = search_first_music(app, query).await? else {
         return Ok(None);
     };
-    let info = resolve_stream_info_with_strategies(app, &result.url, &resolver_strategy_order())
-        .await?;
+    let info =
+        resolve_stream_info_with_strategies(app, &result.url, &resolver_strategy_order()).await?;
     Ok(Some(ResolvedTrack {
         stream_url: info.stream_url,
         url: result.url,
@@ -649,7 +686,7 @@ pub async fn enumerate_playlist(_app: &AppHandle, url: &str) -> Result<PlaylistR
 mod tests {
     use super::{
         parse_stream_info_output, resolver_strategy_order, strategy_argument_sets,
-        ResolverStrategy, POT_PLAYER_CLIENT, POT_PROVIDER_ARGS,
+        stream_availability_delay, ResolverStrategy, POT_PLAYER_CLIENT, POT_PROVIDER_ARGS,
     };
 
     #[test]
@@ -706,5 +743,15 @@ mod tests {
         .expect_err("metadata without a URL must fail");
         assert!(error.contains("web-embedded"));
         assert!(error.contains("no playable stream URL"));
+    }
+
+    #[test]
+    fn stream_availability_delay_honors_short_site_delay() {
+        assert_eq!(
+            stream_availability_delay(Some(1_005), 1_000),
+            Some(std::time::Duration::from_secs(5))
+        );
+        assert_eq!(stream_availability_delay(Some(1_000), 1_000), None);
+        assert_eq!(stream_availability_delay(Some(2_000), 1_000), None);
     }
 }

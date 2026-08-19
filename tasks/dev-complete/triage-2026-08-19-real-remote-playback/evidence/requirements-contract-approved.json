@@ -1,0 +1,12 @@
+{
+  "version": "1.0",
+  "timestamp": "2026-08-19T19:51:27Z",
+  "task_dir": "triage-2026-08-19-real-remote-playback",
+  "contract_file": "requirements-contract.md",
+  "contract_sha256": "35d452e99a77ecab071bef741e60741601d4948033b41f8e1084e07d1f67a69c",
+  "feature_count": 2,
+  "approved": true,
+  "approved_by": "geoffrey",
+  "generated_by": "contract-approve.sh",
+  "script_hash": "1fc1a33299eedfbcc3a9a0c33ef79546d4f5fdfa1e52561bd1add575d815d733"
+}

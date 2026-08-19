@@ -1,0 +1,112 @@
+{
+  "version": "1.0",
+  "triage_date": "2026-08-19T20:20:00Z",
+  "task_dir": "tasks/in-progress/triage-2026-08-19-real-remote-playback",
+  "triage_qa_verdict": "PASS",
+  "triage_qa_evidence": "evidence/helga-verdict.json",
+  "intake": {
+    "approved": true,
+    "approved_at": "2026-08-19T19:20:00Z",
+    "issue_count": 2
+  },
+  "issues": [
+    {
+      "issue_id": "REG-001",
+      "title": "Remote startup accepted unusable media sessions",
+      "classification": "regression",
+      "status": "closed",
+      "reproduction": {
+        "command": "BKGRND_ALLOW_DISRUPTIVE_PLAYBACK_TEST=1 bash scripts/verify-remote-playback-matrix.sh --startup",
+        "output_artifact": "evidence/red-tdd-RED-1.log",
+        "expected": "A non-live history item advances through the remote queue and falls through when the first resolver session is unusable.",
+        "actual": "The remote API reported playing after MPV created an IPC socket, while position remained at zero and the media URL returned HTTP 403."
+      },
+      "root_cause": {
+        "file": "src-tauri/src/ytdlp.rs",
+        "line": 320,
+        "explanation": "bkgrnd discarded yt-dlp's short available_at delay and opened the signed media URL before YouTube allowed it; the startup path then treated IPC creation as playable without requiring a real position.",
+        "pattern": "Resolver metadata required for media validity was dropped before handing a direct GVS URL to MPV."
+      },
+      "fix": {
+        "files_changed": [
+          "src-tauri/src/ytdlp.rs",
+          "src-tauri/src/player.rs",
+          "src-tauri/src/mpv.rs",
+          "scripts/verify-remote-playback-matrix.sh"
+        ],
+        "test_file": "tasks/in-progress/triage-2026-08-19-real-remote-playback/tests/real-remote-playback.test.sh",
+        "description": "Honor YouTube's bounded stream-availability timestamp, require a real non-idle MPV position before startup succeeds, and fall through the resolver chain when readiness fails."
+      },
+      "verification": {
+        "red_evidence": "evidence/red-tdd.json",
+        "green_evidence": "evidence/production-verification.json",
+        "regression_clean": true,
+        "regression_evidence": "evidence/localhost-verification.json"
+      },
+      "regression_provenance": {
+        "artifact_type": "other",
+        "artifact_ref": "tasks/done/fix-2026-08-19-youtube-playback-resilience/evidence/production-verification.json",
+        "baseline_claim": "The prior delivery claimed reliable YouTube startup and fallback based on a single curated live verifier URL.",
+        "drift_observation": "A real non-live history URL was accepted as playing while its position stayed at zero; the old proof never exercised this path.",
+        "suspect_change_window": "Implementation and verification introduced by the 2026-08-19 youtube-playback-resilience delivery."
+      },
+      "closeout": {
+        "prevention_control_type": "test",
+        "prevention_control_ref": "scripts/verify-remote-playback-matrix.sh --startup",
+        "prevention_verified": true,
+        "prevention_verification_evidence": "evidence/production-verification.json"
+      }
+    },
+    {
+      "issue_id": "REG-002",
+      "title": "Ordinary YouTube sessions had no automatic recovery",
+      "classification": "regression",
+      "status": "closed",
+      "reproduction": {
+        "command": "BKGRND_ALLOW_DISRUPTIVE_PLAYBACK_TEST=1 bash scripts/verify-remote-playback-matrix.sh --soak-seconds 95",
+        "output_artifact": "evidence/red-tdd-RED-1.log",
+        "expected": "A stalled or abnormally exited ordinary video resumes through the next usable resolver.",
+        "actual": "Recovery watchers and abnormal-exit fallback were restricted to sessions marked live, so non-live playback stopped without recovery."
+      },
+      "root_cause": {
+        "file": "src-tauri/src/player.rs",
+        "line": 747,
+        "explanation": "The recovery watcher filtered SessionRecovery by is_live and the exit strategy repeated that restriction, excluding ordinary videos from both stall and abnormal-exit recovery.",
+        "pattern": "A reliability mechanism was scoped to one media subtype even though every resolver returns expiring or rejectable direct media URLs."
+      },
+      "fix": {
+        "files_changed": [
+          "src-tauri/src/player.rs",
+          "scripts/verify-remote-playback-matrix.sh"
+        ],
+        "test_file": "tasks/in-progress/triage-2026-08-19-real-remote-playback/tests/real-remote-playback.test.sh",
+        "description": "Attach guarded stall and abnormal-exit recovery to every YouTube session while retaining pause, shuffle, clean-exit, and generation ownership protections."
+      },
+      "verification": {
+        "red_evidence": "evidence/red-tdd.json",
+        "green_evidence": "evidence/production-verification.json",
+        "regression_clean": true,
+        "regression_evidence": "evidence/localhost-verification.json"
+      },
+      "regression_provenance": {
+        "artifact_type": "git_commit",
+        "artifact_ref": "670e24d29755c95b69d9e2392629edb07712ab98",
+        "baseline_claim": "The prior delivery claimed playback resilience but implemented automatic recovery only for live sessions.",
+        "drift_observation": "Ordinary remote-controlled videos could stall or exit after startup with no resolver transition.",
+        "suspect_change_window": "Implementation and verification introduced by the 2026-08-19 youtube-playback-resilience delivery."
+      },
+      "closeout": {
+        "prevention_control_type": "test",
+        "prevention_control_ref": "scripts/verify-remote-playback-matrix.sh --soak-seconds 95",
+        "prevention_verified": true,
+        "prevention_verification_evidence": "evidence/production-verification.json"
+      }
+    }
+  ],
+  "summary": {
+    "total": 2,
+    "bugs": 0,
+    "regressions": 2,
+    "all_closed": true
+  }
+}

@@ -1,0 +1,56 @@
+issue_ids:
+  - REG-001
+  - REG-002
+title: Real remote YouTube sessions accepted false readiness and excluded non-live recovery
+severity: P0
+
+what_broke: >
+  Remote control could report an ordinary YouTube video as playing before its
+  media position advanced, and ordinary non-live sessions were excluded from
+  the automatic resolver recovery used by live streams.
+
+root_cause:
+  file: src-tauri/src/player.rs
+  line: 747
+  detail: >
+    The startup boundary treated successful MPV IPC creation as usable media
+    without requiring position progress, while resolver metadata needed to
+    honor YouTube's availability time was discarded. Recovery watchers and
+    abnormal-exit fallback then filtered sessions by the live flag, leaving
+    ordinary videos outside the resilience path.
+
+why_tests_missed_it: >
+  The prior delivery verified a single curated live URL. It did not exercise a
+  real ordinary history item, a real YouTube Mix, non-live readiness failure,
+  or non-live recovery beyond the historical cutoff.
+
+how_it_occurred: >
+  Two locally reasonable assumptions composed into a user-visible regression:
+  an IPC socket was treated as playback readiness, and recovery was scoped to
+  live media because the original incident involved expiring live segments.
+  Direct YouTube media URLs can be temporarily unavailable or fail for both
+  live and ordinary videos, so neither assumption held for real remote use.
+
+process_gap: >
+  Production acceptance did not require diverse URLs from actual user history
+  or observable position progression. A curated verifier URL could therefore
+  pass while the arbitrary remote-control path remained broken.
+
+fix_applied:
+  - Require real non-idle position advancement before remote startup succeeds.
+  - Honor bounded YouTube media availability before opening a direct URL.
+  - Continue the resolver chain when a session never becomes playable.
+  - Apply guarded stall and abnormal-exit recovery to every YouTube session.
+  - Verify distinct ordinary, Mix, and live-history URLs while excluding the old verifier ID.
+
+prevention:
+  control_type: tests_and_production_matrix
+  control_ref: >
+    tasks/dev-complete/triage-2026-08-19-real-remote-playback/tests/real-remote-playback.test.sh;
+    scripts/verify-remote-playback-matrix.sh
+  action: >
+    Unit coverage freezes readiness and session-ownership rules. The muted
+    installed-app matrix requires actual advancement across diverse real remote
+    URLs and exercises forced startup fallback plus non-live recovery.
+  verified: true
+  verification_evidence: evidence/localhost-verification.json

@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "finding_fingerprint": "575430d2dd96189b3d77b482656fd27d111bca9d96e1a759d39c92d9ad89db9d",
+  "original_agent": "codex-reviewer",
+  "validation_agent": "validation-agent-2",
+  "provider": "codex",
+  "verdict": "REAL",
+  "confidence": 99,
+  "score": 99,
+  "notes": "`mix_url` accepts the first non-live `type == \"playlist\"` item (or any environment override) without requiring a YouTube Mix/radio identifier such as `list=RD...`; AT-3 therefore can pass with an ordinary playlist despite its contract.",
+  "timestamp": "2026-08-19T20:21:30.601Z",
+  "generated_by": "hosaka-review-runner.mjs",
+  "runner_hash": "e6314bca3802ea998e3a7e5400f3fd7579de455c7bf72185bec2802a391a7810"
+}
