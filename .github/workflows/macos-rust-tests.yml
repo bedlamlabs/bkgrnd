@@ -1,0 +1,25 @@
+name: Rust tests (macOS)
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  tauri-tests:
+    name: Tauri Rust tests
+    # This project bundles an aarch64 Apple sidecar, so keep CI on GitHub's
+    # Apple-silicon macOS image.
+    runs-on: macos-15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run Tauri Rust tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml
