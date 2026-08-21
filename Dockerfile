@@ -11,7 +11,7 @@ ARG DENO_VERSION=2.5.6
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates python3 python3-pip curl unzip \
-    && python3 -m pip install --break-system-packages --no-cache-dir yt-dlp \
+    && python3 -m pip install --break-system-packages --no-cache-dir yt-dlp yt-dlp-ejs \
     && curl -fsSL "https://github.com/denoland/deno/releases/download/v${DENO_VERSION}/deno-x86_64-unknown-linux-gnu.zip" -o /tmp/deno.zip \
     && unzip /tmp/deno.zip -d /usr/local/bin \
     && chmod +x /usr/local/bin/deno \
