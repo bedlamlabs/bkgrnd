@@ -1,0 +1,19 @@
+{
+  "run_id": "33019432183",
+  "status": "completed",
+  "conclusion": "success",
+  "workflow": "Rust tests (macOS)",
+  "branch": "main",
+  "headSha": "da3c68c848e43f12e1592443017e04f2a2eeb6f4",
+  "elapsed": 156,
+  "job_count": 1,
+  "generated_by": "ci-monitor.sh",
+  "script_hash": "95d8319dedcbb576b173cebb5184a88b84bd9dedc8292ed3aee4e0c05b80f915",
+  "jobs": [
+  {
+    "name": "Tauri Rust tests",
+    "status": "completed",
+    "conclusion": "success"
+  }
+]
+}

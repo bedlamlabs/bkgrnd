@@ -161,5 +161,41 @@
         "notes": "Architect review is agent-driven (Step 8)"
       }
     }
+  },
+  "production_verification": {
+    "timestamp": "2026-08-26T22:29:06Z",
+    "production_url": "https://bkgrnd.bedl.am",
+    "verdict": "PASS",
+    "total_checks": 3,
+    "passed": 3,
+    "failed": 0,
+    "generated_by": "verify-production.sh",
+    "script_hash": "89e3a7a48dcbee61dbd46c9d7c77bce5c69a491f5e9c34962ec345a56ccfa8f9",
+    "checks": [
+      {
+        "type": "health",
+        "target": "https://bkgrnd.bedl.am/api/v1/health",
+        "method": "curl",
+        "status": "PASS",
+        "detail": "HTTP 200"
+      },
+      {
+        "type": "api",
+        "target": "https://bkgrnd.bedl.am/api/v1/health",
+        "method": "curl",
+        "status": "PASS",
+        "detail": "GET HTTP 200",
+        "route": "/api/v1/health",
+        "http_status": 200,
+        "http_method": "GET"
+      },
+      {
+        "type": "acceptance_test",
+        "target": "acceptance:AT-3",
+        "method": "bash",
+        "status": "PASS",
+        "detail": "PASS: bash scripts/verify-hpx-runtime-resilience.sh"
+      }
+    ]
   }
 }

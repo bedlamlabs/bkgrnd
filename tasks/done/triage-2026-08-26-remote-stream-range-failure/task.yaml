@@ -1,6 +1,6 @@
 id: "triage-2026-08-26-remote-stream-range-failure"
 title: "Triage: HPX resolver runtime survivability"
-status: dev-complete
+status: done
 workflow_mode: turbo
 triage: true
 complexity: 1

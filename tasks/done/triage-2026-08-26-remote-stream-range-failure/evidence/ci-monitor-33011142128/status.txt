@@ -1,0 +1,7 @@
+[13:37:32] Run #33011142128 — completed (125s elapsed)
+Workflow: Rust tests (macOS)
+Branch: main
+
+Jobs:
+  ✅ Tauri Rust tests — completed (success)
+[13:37:32] COMPLETED — success (125s)

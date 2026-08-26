@@ -1,0 +1,1 @@
+{"hmac": "03cf2b2bf09a85943fff9797654f229f180e8d127c7c29515afa613616c27d3c", "evidence_sha256": "d8780c00f786df8d0790d685e9de6f43b1a7576cbd15d0eff2f5f442ede684ae", "signed_at": "2026-08-26T22:32:02.871895+00:00", "daemon_version": "2.0.0"}

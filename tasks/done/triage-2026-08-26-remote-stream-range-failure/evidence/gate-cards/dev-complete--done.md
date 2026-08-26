@@ -1,5 +1,5 @@
 # Gate Card — dev-complete->done (triage-2026-08-26-remote-stream-range-failure)
-Timestamp: 2026-08-26T17:49:52Z
+Timestamp: 2026-08-26T22:35:11Z
 Gate exit: 3 (PASSED)
 
 ```
