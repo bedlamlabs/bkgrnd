@@ -1,0 +1,19 @@
+{
+  "covered_cases": [
+    "/api/v1/health",
+    "AT-3"
+  ],
+  "invalid_commands": [],
+  "missing_cases": [],
+  "required_cases": [
+    {
+      "id": "/api/v1/health",
+      "type": "route"
+    },
+    {
+      "id": "AT-3",
+      "type": "acceptance"
+    }
+  ],
+  "verdict": "PASS"
+}

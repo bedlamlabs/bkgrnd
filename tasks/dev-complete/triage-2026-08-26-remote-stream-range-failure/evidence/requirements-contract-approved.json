@@ -1,0 +1,12 @@
+{
+  "version": "1.0",
+  "timestamp": "2026-08-26T19:58:18Z",
+  "task_dir": "triage-2026-08-26-remote-stream-range-failure",
+  "contract_file": "requirements-contract.md",
+  "contract_sha256": "ce457018db75236e6a5438952ab57e874ea44099162f70cf2d104afb4f865b54",
+  "feature_count": 1,
+  "approved": true,
+  "approved_by": "geoffrey",
+  "generated_by": "contract-approve.sh",
+  "script_hash": "1fc1a33299eedfbcc3a9a0c33ef79546d4f5fdfa1e52561bd1add575d815d733"
+}

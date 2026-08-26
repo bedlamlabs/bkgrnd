@@ -1,0 +1,25 @@
+{
+  "version": "1.0",
+  "transition": "backlog->in-progress",
+  "task_path": "/Users/geoffmccaleb/bkgrnd/tasks/backlog/triage-2026-08-26-remote-stream-range-failure",
+  "workflow_mode": "turbo",
+  "bypass_questions": "forbidden",
+  "prerequisites": [
+    {
+      "predicate": "baseline_hashes_current",
+      "owner": "scripts/hash-baselines.sh",
+      "command": "bash ~/.hosaka/scripts/hash-baselines.sh \"/Users/geoffmccaleb/bkgrnd/tasks/backlog/triage-2026-08-26-remote-stream-range-failure\""
+    },
+    {
+      "predicate": "red_tdd_valid",
+      "owner": "scripts/run-red-tdd.sh",
+      "command": "bash ~/.hosaka/scripts/run-red-tdd.sh \"/Users/geoffmccaleb/bkgrnd/tasks/backlog/triage-2026-08-26-remote-stream-range-failure\""
+    },
+    {
+      "predicate": "requirements_contract_approved",
+      "owner": "scripts/contract-approve.sh",
+      "command": "bash ~/.hosaka/scripts/contract-approve.sh \"/Users/geoffmccaleb/bkgrnd/tasks/backlog/triage-2026-08-26-remote-stream-range-failure\""
+    }
+  ],
+  "generated_by": "hosaka-gate-plan.sh"
+}

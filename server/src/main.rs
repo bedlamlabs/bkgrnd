@@ -1,4 +1,6 @@
 mod auth;
+#[path = "../services/provider_health.rs"]
+mod provider_health;
 mod spotify;
 
 use anyhow::Context;
@@ -31,7 +33,7 @@ const YTDLP_SEARCH_TIMEOUT: Duration = Duration::from_secs(30);
 const PROXY_CHUNK: u64 = 1024 * 1024;
 // yt-dlp forks a python + JS-runtime process per invocation; cap global
 // concurrency so a burst of clients can't exhaust the host.
-const YTDLP_MAX_CONCURRENCY: usize = 4;
+const YTDLP_MAX_CONCURRENCY: usize = 1;
 const SEARCH_CACHE_TTL: Duration = Duration::from_secs(5 * 60);
 // Long-poll hold for /local/commands/next: sub-second command pickup without
 // the Mac hammering the endpoint every 2s.
@@ -44,6 +46,7 @@ struct AppState {
     bearer_token: Option<String>,
     playlists_lock: Arc<Mutex<()>>,
     http: reqwest::Client,
+    provider_health: provider_health::ProviderHealth,
     stream_cache: Arc<Mutex<HashMap<String, CachedStreamUrl>>>,
     stream_failures: Arc<Mutex<HashMap<String, CachedStreamFailure>>>,
     stream_resolves: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
@@ -528,8 +531,12 @@ fn state_allows_media_url(state: &AppState, value: &str) -> bool {
     false
 }
 
-async fn health() -> impl IntoResponse {
-    (StatusCode::OK, "ok")
+async fn health(State(state): State<AppState>) -> impl IntoResponse {
+    if state.provider_health.available().await {
+        (StatusCode::OK, "ok")
+    } else {
+        (StatusCode::SERVICE_UNAVAILABLE, "POT provider unavailable")
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -2687,12 +2694,19 @@ async fn main() -> anyhow::Result<()> {
     );
 
     let http = build_http_client().context("failed to build reqwest client")?;
+    let pot_provider_url = std::env::var("WOPR_POT_PROVIDER_URL")
+        .ok()
+        .filter(|value| !value.trim().is_empty());
+    let provider_health =
+        provider_health::ProviderHealth::new(http.clone(), pot_provider_url.as_deref())
+            .map_err(anyhow::Error::msg)?;
 
     let state = AppState {
         data_dir,
         bearer_token,
         playlists_lock: Arc::new(Mutex::new(())),
         http,
+        provider_health,
         stream_cache: Arc::new(Mutex::new(HashMap::new())),
         stream_failures: Arc::new(Mutex::new(HashMap::new())),
         stream_resolves: Arc::new(Mutex::new(HashMap::new())),
@@ -2770,16 +2784,18 @@ mod tests {
     use super::*;
     use axum::body::to_bytes;
     use std::os::unix::fs::PermissionsExt;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     static YTDLP_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     fn test_state(http: reqwest::Client) -> AppState {
+        let provider_health = provider_health::ProviderHealth::new(http.clone(), None).unwrap();
         AppState {
             data_dir: std::env::temp_dir(),
             bearer_token: None,
             playlists_lock: Arc::new(Mutex::new(())),
             http,
+            provider_health,
             stream_cache: Arc::new(Mutex::new(HashMap::new())),
             stream_failures: Arc::new(Mutex::new(HashMap::new())),
             stream_resolves: Arc::new(Mutex::new(HashMap::new())),
@@ -2794,6 +2810,53 @@ mod tests {
             registration_open: false,
             allow_test_media_urls: true,
         }
+    }
+
+    #[tokio::test]
+    async fn hpx_runtime_health_fails_closed_and_recovers_with_provider() {
+        let provider_ready = Arc::new(AtomicBool::new(false));
+        let provider_checks = Arc::new(AtomicUsize::new(0));
+        let app = Router::new().route(
+            "/ping",
+            get({
+                let provider_ready = provider_ready.clone();
+                let provider_checks = provider_checks.clone();
+                move || {
+                    let provider_ready = provider_ready.clone();
+                    let provider_checks = provider_checks.clone();
+                    async move {
+                        provider_checks.fetch_add(1, Ordering::SeqCst);
+                        if provider_ready.load(Ordering::SeqCst) {
+                            StatusCode::OK
+                        } else {
+                            StatusCode::SERVICE_UNAVAILABLE
+                        }
+                    }
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let mut state = test_state(reqwest::Client::new());
+        state.provider_health = provider_health::ProviderHealth::new(
+            state.http.clone(),
+            Some(&format!("http://{address}")),
+        )
+        .unwrap();
+
+        let unavailable = health(State(state.clone())).await.into_response();
+        assert_eq!(unavailable.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let cached_unavailable = health(State(state.clone())).await.into_response();
+        assert_eq!(cached_unavailable.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(provider_checks.load(Ordering::SeqCst), 1);
+
+        provider_ready.store(true, Ordering::SeqCst);
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let recovered = health(State(state)).await.into_response();
+        assert_eq!(recovered.status(), StatusCode::OK);
+        assert_eq!(provider_checks.load(Ordering::SeqCst), 2);
     }
 
     #[tokio::test]
@@ -3495,6 +3558,8 @@ mod tests {
     fn production_container_pins_and_starts_loopback_pot_provider() {
         let dockerfile = include_str!("../../Dockerfile");
         let entrypoint = include_str!("../container-entrypoint.sh");
+        let web_app = include_str!("../web/app.js");
+        let resilience_verifier = include_str!("../../scripts/verify-hpx-runtime-resilience.sh");
         assert!(dockerfile.contains("fbe4ed47f3b63cf061f1158f18f74bcc90e54033"));
         assert!(
             dockerfile.contains("cbc8c2e54126ec38f4c2a278b3cab685d337cadc3e7f09762116e3b28be18b5f")
@@ -3510,7 +3575,24 @@ mod tests {
         assert!(entrypoint.contains("127.0.0.1"));
         assert!(entrypoint.contains("4416"));
         assert!(entrypoint.contains("/ping"));
-        assert!(entrypoint.contains("exec bkgrnd_server"));
+        assert!(entrypoint.contains("restarting POT provider"));
+        assert!(entrypoint.contains("bkgrnd_server \"$@\" &"));
+        assert!(dockerfile.contains("ENV WOPR_POT_PROVIDER_URL=http://127.0.0.1:4416"));
+        assert!(dockerfile.contains("COPY server/services ./services"));
+        assert!(dockerfile.contains("ARG BKGRND_UID=10001"));
+        assert!(dockerfile.contains("ARG BKGRND_GID=10001"));
+        assert!(dockerfile.contains("USER bkgrnd:bkgrnd"));
+        assert!(dockerfile.contains("ENV HOME=/var/lib/bkgrnd"));
+        assert!(dockerfile.contains("ENV XDG_CACHE_HOME=/var/cache/bkgrnd"));
+        assert!(dockerfile.contains("/var/lib/bkgrnd/provider-home"));
+        assert!(dockerfile.contains("/var/cache/bkgrnd/deno"));
+        assert!(entrypoint
+            .contains("provider_home=${WOPR_POT_PROVIDER_HOME:-/var/lib/bkgrnd/provider-home}"));
+        assert!(entrypoint
+            .contains("provider_deno_dir=${WOPR_POT_PROVIDER_DENO_DIR:-/var/cache/bkgrnd/deno}"));
+        assert!(!entrypoint.contains("provider_home=/opt/"));
+        assert!(!entrypoint.contains("provider_deno_dir=/opt/"));
+        assert_eq!(YTDLP_MAX_CONCURRENCY, 1);
         assert!(dockerfile.contains("ARG TARGETARCH"));
         assert!(dockerfile.contains("deno-x86_64-unknown-linux-gnu.zip"));
         assert!(dockerfile.contains("deno-aarch64-unknown-linux-gnu.zip"));
@@ -3530,6 +3612,27 @@ mod tests {
         assert!(entrypoint.contains("exec env -i"));
         assert!(entrypoint.contains("--allow-env \\"));
         assert!(!entrypoint.contains("--allow-env="));
+        assert!(web_app.contains("prewarmItems(items.slice(0, 1))"));
+        assert!(resilience_verifier.contains("candidate_pid == scanner_pid"));
+        assert!(resilience_verifier
+            .contains("os.path.basename(os.readlink(f\"{proc_dir}/exe\")) != \"deno\""));
+        assert!(resilience_verifier.contains(".read().split(b\"\\0\")"));
+        assert!(resilience_verifier.contains("[b\"--port\", b\"4416\"]"));
+        assert!(resilience_verifier.contains("if len(matches) != 1:"));
+        assert!(resilience_verifier.contains("os.kill(provider_pid, signal.SIGTERM)"));
+        assert!(!resilience_verifier.contains("sh -c \"kill -TERM"));
+        assert!(resilience_verifier.contains("auth_config_file=\"$work_dir/auth.curlrc\""));
+        assert!(resilience_verifier.contains("umask 077"));
+        assert_eq!(
+            resilience_verifier
+                .matches("--config \"$auth_config_file\"")
+                .count(),
+            4
+        );
+        assert!(!resilience_verifier.contains("Authorization: Bearer ${auth_token}"));
+        assert!(resilience_verifier
+            .contains("/api/v1/stream-segment\\?*) media_url=\"${base_url}${media_uri}\""));
+        assert!(!resilience_verifier.contains("https://*) media_url=\"$media_uri\""));
     }
 
     #[test]

@@ -1,0 +1,12 @@
+{
+  "gate": "REVERT",
+  "timestamp": "2026-08-26T19:21:45Z",
+  "task_id": "triage-2026-08-26-remote-stream-range-failure",
+  "task_title": "Triage: 2 issues (remote progressive streams fail on HPX)",
+  "agent_model": "hosaka-gate.sh",
+  "summary": "Revert/reject transition validated",
+  "transition": "done->backlog",
+  "decisions": [],
+  "skipped_checks": [],
+  "source_artifacts": ["done/triage-2026-08-26-remote-stream-range-failure/task.yaml"]
+}

@@ -1,0 +1,33 @@
+Regression scoped to task acceptance_tests; broad repo sweep is not a valid fallback signal for this task package.
+{
+  "version": "1.0",
+  "timestamp": "2026-08-26T20:33:03Z",
+  "task_dir": "triage-2026-08-26-remote-stream-range-failure",
+  "environment": "localhost",
+  "generated_by": "run-acceptance-tests.sh",
+  "script_hash": "ddc0ca337366019f9d3f08f6a3e81128c0d69dfd9a4dc1be02f40a0b1fac2e86",
+  "total_tests": 1,
+  "passed": 1,
+  "failed": 0,
+  "exercised_routes": [],
+  "results": [
+    {
+      "id": "AT-3",
+      "criterion": "HPX automatically recovers its POT provider, exposes dependency failure through health, and remains within its resolver memory budget during repeated real-stream playback.",
+      "tool": "bash",
+      "cmd": "bash \"$(find tasks -type f -path '*/triage-2026-08-26-remote-stream-range-failure/tests/provider-runtime-contract.test.sh' -print -quit)\"",
+      "expect": "exit_0",
+      "actual_exit": 0,
+      "stdout_snippet": "",
+      "pass": true,
+      "status": "PASS",
+      "tools_tried": 1,
+      "capability_claim": "",
+      "fallback_used": false,
+      "exercised_routes": [],
+      "artifact": "",
+      "target": "",
+      "duration_ms": 0
+    }
+  ]
+}

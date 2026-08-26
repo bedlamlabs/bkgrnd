@@ -1,0 +1,55 @@
+issue_ids:
+  - REG-001
+title: HPX provider death silently degraded remote streaming
+severity: P0
+
+what_broke: >
+  HPX continued reporting healthy after its required POT-provider process was
+  OOM-killed. Streams that needed a generated token failed while streams that
+  happened to resolve without the provider continued to work.
+
+root_cause:
+  file: server/container-entrypoint.sh
+  line: 42
+  detail: >
+    The entrypoint checked provider readiness once, then replaced itself with
+    Rust and left no supervisor responsible for restarting the provider. Four
+    concurrent resolver permits allowed multiple memory-heavy yt-dlp/Deno
+    processes beside the provider in a 512 MiB cgroup. Rust health did not
+    include the provider dependency.
+
+why_tests_missed_it: >
+  The prior acceptance matrix proved resolver ordering and successful media
+  bytes but did not kill the provider, assert a health transition, inspect
+  cgroup OOM counters, enforce a memory floor, or run the exact user sequence
+  after concurrent fresh resolution.
+
+how_it_occurred: >
+  The provider was integrated as if startup readiness made it permanently
+  available. Production resolution then created two transient Deno-backed
+  yt-dlp processes alongside the resident provider, exhausted the cgroup, and
+  the kernel selected the provider for termination. The remaining Rust process
+  stayed healthy and continued serving only the source paths that did not need
+  a new generated token.
+
+process_gap: >
+  Production verification treated one successful resolver call and Rust-only
+  health as sufficient. It did not test dependency death or validate runtime
+  memory headroom under the same concurrency the service allowed.
+
+fix_applied:
+  - Supervise and restart the provider with bounded backoff.
+  - Return HTTP 503 while the required provider is unavailable.
+  - Serialize memory-heavy yt-dlp resolution and reduce speculative prewarming.
+  - Require a 1 GiB HPX memory limit.
+  - Stress fresh resolution and replay Tokyo, Sunday Jazz, and Night Work twice.
+
+prevention:
+  control_type: test
+  control_ref: scripts/verify-hpx-runtime-resilience.sh
+  action: >
+    Make provider fault injection, dependency-aware health, cgroup OOM drift,
+    memory headroom, and the ordered three-stream playback matrix mandatory in
+    every HPX production verification.
+  verified: true
+  verification_evidence: /tmp/triage-reg-001-green.txt

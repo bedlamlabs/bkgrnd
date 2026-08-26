@@ -1,0 +1,165 @@
+{
+  "version": "1.0",
+  "triage_date": "2026-08-26T19:12:00Z",
+  "task_dir": "tasks/in-progress/triage-2026-08-26-remote-stream-range-failure",
+  "intake": {
+    "approved": true,
+    "approved_at": "2026-08-26T20:08:00Z",
+    "issue_count": 1
+  },
+  "issues": [
+    {
+      "issue_id": "REG-001",
+      "title": "HPX provider death silently degraded remote streaming",
+      "severity": "P0",
+      "domains": [
+        "api",
+        "infra"
+      ],
+      "category": "API / Runtime reliability",
+      "route": "/api/v1/health and remote stream resolver",
+      "description": "The 512 MiB HPX container OOM-killed the POT-provider daemon while concurrent yt-dlp/Deno resolvers ran. The provider never restarted and Rust health remained green, causing source-dependent remote playback failures.",
+      "classification": "regression",
+      "status": "closed",
+      "reproduction": {
+        "method": "curl",
+        "command": "curl -sS -o /dev/null -w 'public_health=%{http_code}\\n' https://bkgrnd.bedl.am/api/v1/health",
+        "output_artifact": "/tmp/triage-reg-001-runtime-reproduction.txt",
+        "expected": "Health is non-success whenever the required loopback POT provider is unavailable.",
+        "actual": "Public health returned HTTP 200 while the provider was connection-refused after a cgroup OOM kill."
+      },
+      "acceptance_test": {
+        "id": "AT-3",
+        "criterion": "HPX automatically recovers its POT provider, exposes dependency failure through health, and remains within its resolver memory budget during repeated real-stream playback.",
+        "verify": {
+          "localhost": {
+            "primary": {
+              "tool": "bash",
+              "cmd": "bash \"$(find tasks -type f -path '*/triage-2026-08-26-remote-stream-range-failure/tests/provider-runtime-contract.test.sh' -print -quit)\"",
+              "expect": "exit_0"
+            }
+          },
+          "production": {
+            "primary": {
+              "tool": "bash",
+              "cmd": "bash scripts/verify-hpx-runtime-resilience.sh",
+              "expect": "exit_0"
+            }
+          }
+        }
+      },
+      "root_cause": {
+        "file": "server/container-entrypoint.sh",
+        "line": 42,
+        "explanation": "The entrypoint launched the POT provider once and then replaced itself with Rust, so an OOM-killed provider stayed dead. Four concurrent resolver permits allowed multiple memory-heavy yt-dlp/Deno processes beside the provider inside a 512 MiB cgroup, and /api/v1/health checked only Rust.",
+        "pattern": "A required sidecar-like child process had startup readiness but no lifecycle supervision, dependency-aware health, or stress-verified memory budget."
+      },
+      "fix": {
+        "files_changed": [
+          "server/container-entrypoint.sh",
+          "server/src/main.rs",
+          "server/services/provider_health.rs",
+          "server/web/app.js",
+          "Dockerfile",
+          "scripts/verify-hpx-runtime-resilience.sh"
+        ],
+        "test_file": "tasks/in-progress/triage-2026-08-26-remote-stream-range-failure/tests/provider-runtime-contract.test.sh",
+        "description": "Supervise and restart the provider, make health fail closed on provider loss, serialize memory-heavy resolution, limit initial prewarming, require at least 1 GiB at runtime, and verify recovery plus the exact three-stream sequence under production stress."
+      },
+      "verification": {
+        "red_evidence": "tasks/in-progress/triage-2026-08-26-remote-stream-range-failure/evidence/red-tdd.json",
+        "green_evidence": "/tmp/triage-reg-001-green.txt",
+        "regression_clean": true,
+        "regression_evidence": "/tmp/triage-reg-001-green.txt"
+      },
+      "regression_provenance": {
+        "artifact_type": "git_commit",
+        "artifact_ref": "56cc089332c72cae0e4d6e1ff5a43dded3fda878",
+        "baseline_claim": "The prior production delivery claimed that HPX POT and ordered fallback resolution were working and exact-release health passed.",
+        "drift_observation": "Within the same production run the provider was OOM-killed, never restarted, health stayed green, and Sunday Morning Jazz failed while two streams that did not need a generated token still worked.",
+        "suspect_change_window": "Production deployment 56cc089332c72cae0e4d6e1ff5a43dded3fda878 through the 2026-08-26 phone tests."
+      },
+      "closeout": {
+        "prevention_control_type": "test",
+        "prevention_control_ref": "scripts/verify-hpx-runtime-resilience.sh",
+        "prevention_verified": true,
+        "prevention_verification_evidence": "/tmp/triage-reg-001-green.txt"
+      }
+    }
+  ],
+  "summary": {
+    "total": 1,
+    "bugs": 0,
+    "regressions": 1,
+    "all_closed": true
+  },
+  "triage_qa_verdict": "PASS",
+  "triage_qa_provenance": {
+    "generated_by": "hosaka-verify.sh",
+    "script_hash": "396b85f6266b994f3e56bf0013ca0636fd39784ba528d79a39cfc353d041eb37",
+    "timestamp": "2026-08-26T20:33:04Z",
+    "source": "QA-RESULT.json",
+    "steps": {
+      "hash_check": {
+        "status": "PASS",
+        "evidence_path": "evidence/hash-verification.txt",
+        "notes": "Baseline integrity check"
+      },
+      "unit_tests": {
+        "status": "PASS",
+        "evidence_path": "evidence/unit-test-output.txt",
+        "pass_count": 1,
+        "fail_count": 0,
+        "total": 1,
+        "notes": "acceptance_tests: 1 passed, 0 failed, 1 total"
+      },
+      "dixie": {
+        "status": "SKIP",
+        "evidence_path": "evidence/dixie-smoke-output.txt",
+        "routes_checked": 0,
+        "routes_failed": 0,
+        "console_errors": 0,
+        "notes": "0 routes checked, 0 failed"
+      },
+      "dixie_3b": {
+        "status": "SKIP",
+        "evidence_path": "evidence/dixie-queries-output.txt",
+        "routes_checked": 0,
+        "routes_failed": 0,
+        "notes": ""
+      },
+      "regression": {
+        "status": "PASS",
+        "evidence_path": "evidence/regression-output.txt",
+        "pass_count": 1,
+        "fail_count": 0,
+        "new_failures": 0,
+        "notes": "1 passed, 0 failed"
+      },
+      "design": {
+        "status": "SKIP",
+        "evidence_path": "evidence/design-output.txt",
+        "notes": "Design QA is agent-driven (Step 5b)"
+      },
+      "traceability": {
+        "status": "SKIP",
+        "evidence_path": "evidence/traceability-output.txt",
+        "total_requirements": 0,
+        "verified": 0,
+        "failed": 0,
+        "post_deploy": 0,
+        "notes": "Traceability is agent-driven (Step 6)"
+      },
+      "thin_client": {
+        "status": "SKIP",
+        "evidence_path": "evidence/thin-client-output.txt",
+        "notes": "Thin client business logic check"
+      },
+      "architect": {
+        "status": "SKIP",
+        "evidence_path": "evidence/architect-output.txt",
+        "notes": "Architect review is agent-driven (Step 8)"
+      }
+    }
+  }
+}

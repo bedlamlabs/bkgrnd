@@ -1,0 +1,12 @@
+No task-local vitest config found; running task acceptance_tests through owner executor.
+run-acceptance-tests.sh: found 1 acceptance test(s) for localhost
+run-acceptance-tests.sh: auth token not required by acceptance commands
+
+── AT-3: HPX automatically recovers its POT provider, exposes dependency failure through health, and remains within its resolver memory budget during repeated real-stream playback. ──
+  primary [bash]: bash "$(find tasks -type f -path '*/triage-2026-08-26-remote-stream-range-failure/tests/provider-runtime-contract.test.sh' -print -quit)"
+  result: PASS (exit=0)
+
+run-acceptance-tests.sh: evidence written to /Users/geoffmccaleb/bkgrnd/tasks/dev-complete/triage-2026-08-26-remote-stream-range-failure/evidence/acceptance-test-localhost.json
+run-acceptance-tests.sh: attestation written to /Users/geoffmccaleb/bkgrnd/tasks/dev-complete/triage-2026-08-26-remote-stream-range-failure/evidence/acceptance-test-localhost.json.sig
+run-acceptance-tests.sh: 1/1 passed, 0 failed
+run-acceptance-tests.sh: ALL PASS

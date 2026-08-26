@@ -1,0 +1,73 @@
+{
+  "version": "1.0",
+  "task_dir": "triage-2026-08-26-remote-stream-range-failure",
+  "task_title": "Triage: HPX resolver runtime survivability",
+  "timestamp": "2026-08-26T20:33:03Z",
+  "attempt": 1,
+  "verdict": "PASS",
+  "generated_by": "hosaka-verify.sh",
+  "script_hash": "396b85f6266b994f3e56bf0013ca0636fd39784ba528d79a39cfc353d041eb37",
+  "steps": {
+    "hash_check": {
+      "status": "PASS",
+      "evidence_path": "evidence/hash-verification.txt",
+      "notes": "Baseline integrity check"
+    },
+    "unit_tests": {
+      "status": "PASS",
+      "evidence_path": "evidence/unit-test-output.txt",
+      "pass_count": 1,
+      "fail_count": 0,
+      "total": 1,
+      "notes": "acceptance_tests: 1 passed, 0 failed, 1 total"
+    },
+    "dixie": {
+      "status": "SKIP",
+      "evidence_path": "evidence/dixie-smoke-output.txt",
+      "routes_checked": 0,
+      "routes_failed": 0,
+      "console_errors": 0,
+      "notes": "0 routes checked, 0 failed"
+    },
+    "dixie_3b": {
+      "status": "SKIP",
+      "evidence_path": "evidence/dixie-queries-output.txt",
+      "routes_checked": 0,
+      "routes_failed": 0,
+      "notes": ""
+    },
+    "regression": {
+      "status": "PASS",
+      "evidence_path": "evidence/regression-output.txt",
+      "pass_count": 1,
+      "fail_count": 0,
+      "new_failures": 0,
+      "notes": "1 passed, 0 failed"
+    },
+    "design": {
+      "status": "SKIP",
+      "evidence_path": "evidence/design-output.txt",
+      "notes": "Design QA is agent-driven (Step 5b)"
+    },
+    "traceability": {
+      "status": "SKIP",
+      "evidence_path": "evidence/traceability-output.txt",
+      "total_requirements": 0,
+      "verified": 0,
+      "failed": 0,
+      "post_deploy": 0,
+      "notes": "Traceability is agent-driven (Step 6)"
+    },
+    "thin_client": {
+      "status": "SKIP",
+      "evidence_path": "evidence/thin-client-output.txt",
+      "notes": "Thin client business logic check"
+    },
+    "architect": {
+      "status": "SKIP",
+      "evidence_path": "evidence/architect-output.txt",
+      "notes": "Architect review is agent-driven (Step 8)"
+    }
+  },
+  "failures": []
+}

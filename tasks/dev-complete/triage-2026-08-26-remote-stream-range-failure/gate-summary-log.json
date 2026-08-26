@@ -1,0 +1,27 @@
+[
+  {
+    "gate": "CODE_COMPLETE",
+    "timestamp": "2026-08-26T20:22:25Z",
+    "task_id": "triage-2026-08-26-remote-stream-range-failure"
+  },
+  {
+    "gate": "DEPLOY",
+    "timestamp": "2026-08-26T17:49:52Z",
+    "task_id": "triage-2026-08-26-remote-stream-range-failure"
+  },
+  {
+    "gate": "QA",
+    "timestamp": "2026-08-26T20:32:32Z",
+    "task_id": "triage-2026-08-26-remote-stream-range-failure"
+  },
+  {
+    "gate": "REVERT",
+    "timestamp": "2026-08-26T19:21:45Z",
+    "task_id": "triage-2026-08-26-remote-stream-range-failure"
+  },
+  {
+    "gate": "START",
+    "timestamp": "2026-08-26T19:59:31Z",
+    "task_id": "triage-2026-08-26-remote-stream-range-failure"
+  }
+]

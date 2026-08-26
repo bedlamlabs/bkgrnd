@@ -1,0 +1,15 @@
+{
+  "gate": "START",
+  "timestamp": "2026-08-26T19:59:31Z",
+  "task_id": "triage-2026-08-26-remote-stream-range-failure",
+  "task_title": "Triage: HPX resolver runtime survivability",
+  "agent_model": "hosaka-gate.sh",
+  "summary": "Validated task ready to begin development",
+  "transition": "backlog->in-progress",
+  "decisions": [],
+  "skipped_checks": [],
+  "source_artifacts": ["backlog/triage-2026-08-26-remote-stream-range-failure/task.yaml"],
+  "required_domains": ["api","infra"],
+  "start_commit": "796f37edf3947417519adccfbc0a782a7a979bab",
+  "spec_hash": "6526bc76104f07643fc1885c0fcb38a1ed06d380380af9d739f59079c672d517"
+}

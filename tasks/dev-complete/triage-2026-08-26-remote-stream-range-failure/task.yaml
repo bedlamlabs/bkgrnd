@@ -1,0 +1,51 @@
+id: "triage-2026-08-26-remote-stream-range-failure"
+title: "Triage: HPX resolver runtime survivability"
+status: dev-complete
+workflow_mode: turbo
+triage: true
+complexity: 1
+issue_count: 1
+non_web_task: true
+domains: [api, infra]
+route_coverage_required: ["/api/v1/health"]
+ui_changes: false
+db_changes: false
+summary: "Pre-deploy HPX build supervises its required provider, fails health closed, and enforces a stress-tested resource envelope."
+files_touched:
+  - Dockerfile
+  - server/container-entrypoint.sh
+  - server/src/main.rs
+  - server/services/provider_health.rs
+  - server/web/app.js
+  - scripts/verify-hpx-runtime-resilience.sh
+endpoints_affected:
+  - method: GET
+    path: /api/v1/health
+
+production_verification_spec:
+  base_url: "https://bkgrnd.bedl.am"
+
+acceptance_tests:
+  - id: AT-3
+    criterion: "HPX automatically recovers its POT provider, exposes dependency failure through health, and remains within its resolver memory budget during repeated real-stream playback."
+    verify:
+      localhost:
+        primary:
+          tool: bash
+          cmd: "bash \"$(find tasks -type f -path '*/triage-2026-08-26-remote-stream-range-failure/tests/provider-runtime-contract.test.sh' -print -quit)\""
+          expect: exit_0
+      production:
+        primary:
+          tool: bash
+          cmd: "bash scripts/verify-hpx-runtime-resilience.sh"
+          expect: exit_0
+
+red_tdd:
+  commands:
+    - id: AT-3
+      cmd: "bash \"$(find tasks -type f -path '*/triage-2026-08-26-remote-stream-range-failure/tests/provider-runtime-contract.test.sh' -print -quit)\""
+      covers: ["AT-3", "/api/v1/health"]
+
+baseline_hashes:
+  "provider-runtime-contract.test.sh": "70dab0488df85220c7f56ff9c1e35dd83c733779c04ef3f1d855fc64733b253d"
+  "remote-stream-scope.sh": "92f81805c809674f8bb0e4afcdbde32f9e588a58f05f7e094bcb96d49c423362"

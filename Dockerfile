@@ -3,11 +3,14 @@ FROM rust:1-bookworm AS builder
 WORKDIR /app/server
 COPY server/Cargo.toml server/Cargo.lock ./
 COPY server/src ./src
+COPY server/services ./services
 RUN cargo build --release --locked
 
 FROM debian:bookworm-slim
 
 ARG TARGETARCH
+ARG BKGRND_UID=10001
+ARG BKGRND_GID=10001
 ARG DENO_VERSION=2.9.1
 ARG DENO_AMD64_SHA256=710c54d63477d1100844ef4818f19507ce0dbf40510903b1d883f19e394446a2
 ARG DENO_ARM64_SHA256=0a60d079fa79635a59803074dbbfe86ccc35746dc2c4f8d73f2e50338b3283a9
@@ -15,7 +18,7 @@ ARG BGUTIL_PROVIDER_COMMIT=fbe4ed47f3b63cf061f1158f18f74bcc90e54033
 ARG BGUTIL_PROVIDER_ARCHIVE_SHA256=cbc8c2e54126ec38f4c2a278b3cab685d337cadc3e7f09762116e3b28be18b5f
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates python3 python3-pip curl unzip zip \
+    && apt-get install -y --no-install-recommends ca-certificates python3 python3-pip curl passwd unzip zip \
     && printf '%s\n' \
       'yt-dlp==2026.8.19 --hash=sha256:1d57897e94c6665a0a6f9bc54b34e584284e32c034ffab3a7df25d8f7b24eedf' \
       'yt-dlp-ejs==0.8.0 --hash=sha256:79300e5fca7f937a1eeede11f0456862c1b41107ce1d726871e0207424f4bdb4' \
@@ -33,6 +36,12 @@ RUN apt-get update \
     && rm -f /tmp/deno.zip /tmp/yt-dlp-requirements.txt \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
+
+RUN groupadd --gid "${BKGRND_GID}" bkgrnd \
+    && useradd --uid "${BKGRND_UID}" --gid "${BKGRND_GID}" \
+      --home-dir /var/lib/bkgrnd --shell /usr/sbin/nologin --no-create-home bkgrnd \
+    && test "$(id -u bkgrnd)" = "${BKGRND_UID}" \
+    && test "$(id -g bkgrnd)" = "${BKGRND_GID}"
 
 # Patched PR #243 provider. Both the revision and downloaded bytes are pinned.
 # The upstream 1.x listener is rewritten before installation because it has no
@@ -59,17 +68,26 @@ WORKDIR /app
 COPY --from=builder /app/server/target/release/bkgrnd_server /usr/local/bin/bkgrnd_server
 COPY server/web /app/web
 COPY server/container-entrypoint.sh /usr/local/bin/bkgrnd-container-entrypoint
-RUN chmod 0755 /usr/local/bin/bkgrnd-container-entrypoint
+RUN chmod 0755 /usr/local/bin/bkgrnd-container-entrypoint \
+    && mkdir -p /data /var/lib/bkgrnd/provider-home /var/cache/bkgrnd/deno \
+    && chown -R "${BKGRND_UID}:${BKGRND_GID}" /data /var/lib/bkgrnd /var/cache/bkgrnd \
+    && test "$(stat -c '%u:%g' /data)" = "${BKGRND_UID}:${BKGRND_GID}" \
+    && test "$(stat -c '%u:%g' /var/lib/bkgrnd/provider-home)" = "${BKGRND_UID}:${BKGRND_GID}" \
+    && test "$(stat -c '%u:%g' /var/cache/bkgrnd/deno)" = "${BKGRND_UID}:${BKGRND_GID}"
 
 ENV WOPR_BIND=0.0.0.0:808
 ENV WOPR_WEB_DIR=/app/web
 ENV WOPR_DATA_DIR=/data
 ENV WOPR_YTDLP_JS_RUNTIMES=deno:/usr/local/bin/deno
 ENV WOPR_YTDLP_PLUGIN_DIR=/opt/yt-dlp-plugins
+ENV WOPR_POT_PROVIDER_URL=http://127.0.0.1:4416
+ENV HOME=/var/lib/bkgrnd
+ENV XDG_CACHE_HOME=/var/cache/bkgrnd
 ENV RUST_LOG=info
 
 EXPOSE 808
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=5 \
     CMD python3 -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:808/api/v1/health', timeout=3).read()" || exit 1
 
+USER bkgrnd:bkgrnd
 ENTRYPOINT ["/usr/local/bin/bkgrnd-container-entrypoint"]

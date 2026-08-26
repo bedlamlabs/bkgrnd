@@ -1,0 +1,9 @@
+{
+  "version": "1.0",
+  "transition": "done->backlog",
+  "task_path": "/Users/geoffmccaleb/bkgrnd/tasks/done/triage-2026-08-26-remote-stream-range-failure",
+  "workflow_mode": "turbo",
+  "bypass_questions": "forbidden",
+  "prerequisites": [],
+  "generated_by": "hosaka-gate-plan.sh"
+}

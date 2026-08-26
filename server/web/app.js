@@ -436,7 +436,10 @@ function renderGrid() {
   for (const item of items.slice(0, 24)) {
     mixGrid.appendChild(renderCard(item));
   }
-  prewarmItems(items.slice(0, 6));
+  // HPX runs one memory-heavy yt-dlp/Deno resolver at a time. Prime only the
+  // first item so background work cannot queue minutes of resolves ahead of a
+  // user's tap; the player continues to prewarm the next track after playback.
+  prewarmItems(items.slice(0, 1));
 }
 
 function formatDurationChip(seconds) {
