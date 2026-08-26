@@ -97,7 +97,7 @@
   "triage_qa_provenance": {
     "generated_by": "hosaka-verify.sh",
     "script_hash": "396b85f6266b994f3e56bf0013ca0636fd39784ba528d79a39cfc353d041eb37",
-    "timestamp": "2026-08-26T22:02:05Z",
+    "timestamp": "2026-08-26T22:21:44Z",
     "source": "QA-RESULT.json",
     "steps": {
       "hash_check": {

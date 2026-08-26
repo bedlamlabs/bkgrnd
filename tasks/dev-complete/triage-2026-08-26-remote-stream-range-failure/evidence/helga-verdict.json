@@ -4,23 +4,18 @@
   "gate": null,
   "reason": "The task was successfully completed as per the specifications provided.",
   "tools_used": [
-    "api_query",
-    "file_read",
-    "test_runner",
     "code_search",
-    "db_query"
+    "file_read",
+    "test_runner"
   ],
-  "tool_types_count": 5,
-  "turns": 7,
-  "elapsed_seconds": 183.9,
-  "total_tokens": 44418,
+  "tool_types_count": 3,
+  "turns": 4,
+  "elapsed_seconds": 814.8,
+  "total_tokens": 31945,
   "investigation_log": [
     "cat /Users/geoffmccaleb/bkgrnd/tasks/dev-complete/triage-2026-08-26-remote-stream-range-failure/spec.md",
     "bash /Users/geoffmccaleb/bkgrnd/tasks/dev-complete/triage-2026-08-26-remote-stream-range-failure/tests/provider-runtime-contract.test.sh",
     "rg -n 'Triage|resolver|runtime|survivability|Pre\\-deploy|build|supervises|required|provider|fails|health|closed' /Users/geoffmccaleb/bkgrnd/Dockerfile /Users/geoffmccaleb/bkgrnd/server/container-entrypoint.sh /Users/geoffmccaleb/bkgrnd/server/src/main.rs /Users/geoffmccaleb/bkgrnd/server/services/provider_health.rs /Users/geoffmccaleb/bkgrnd/scripts/verify-hpx-runtime-resilience.sh",
-    "PARSE_ERROR",
-    "curl -s -o /dev/null -w \"%{http_code}\" https://bkgrnd.bedl.am/api/v1/health",
-    "psql -U user -d database -c \"SELECT * FROM provider_status;\"",
     "PARSE_ERROR",
     "PARSE_ERROR",
     "PARSE_ERROR",
@@ -30,7 +25,7 @@
   "project": "bkgrnd",
   "profile_used": "webapp",
   "original_verdict": "PASS",
-  "timestamp": "2026-08-26T22:01:59Z",
+  "timestamp": "2026-08-26T22:21:38Z",
   "generated_by": "helga-gate.sh",
   "runner_hash": "364adc1d02cd34cb0de676173e8afb6916b8da5e67369f4bb4ebd2d33c1f820e"
 }

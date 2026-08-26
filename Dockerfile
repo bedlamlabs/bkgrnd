@@ -69,7 +69,7 @@ RUN curl -fsSL \
     && test -z "$(find /opt/bgutil-provider /opt/yt-dlp-plugins -type d ! -perm -0005 -print -quit)" \
     && test -z "$(find /opt/bgutil-provider /opt/yt-dlp-plugins -type f ! -perm -0004 -print -quit)" \
     && test -z "$(find /opt/bgutil-provider /opt/yt-dlp-plugins \( -type f -o -type d \) -perm /0022 -print -quit)" \
-    && test "$(stat -c '%a:%u:%g' /opt/bgutil-provider/server/node_modules/proxy-from-env/package.json)" = "644:0:0" \
+    && test "$(stat -c '%a:%u:%g' /opt/bgutil-provider/server/node_modules/.deno/proxy-from-env@1.1.0/node_modules/proxy-from-env/package.json)" = "644:0:0" \
     && test "$(stat -c '%a:%u:%g' /opt/yt-dlp-plugins/bgutil-ytdlp-pot-provider.zip)" = "644:0:0" \
     && rm -f /tmp/bgutil-provider.tar.gz
 

@@ -3594,7 +3594,7 @@ mod tests {
             "find /opt/bgutil-provider /opt/yt-dlp-plugins \\( -type f -o -type d \\) -perm /0022"
         ));
         assert!(dockerfile.contains(
-            "/opt/bgutil-provider/server/node_modules/proxy-from-env/package.json)\" = \"644:0:0\""
+            "/opt/bgutil-provider/server/node_modules/.deno/proxy-from-env@1.1.0/node_modules/proxy-from-env/package.json)\" = \"644:0:0\""
         ));
         assert!(dockerfile
             .contains("/opt/yt-dlp-plugins/bgutil-ytdlp-pot-provider.zip)\" = \"644:0:0\""));
