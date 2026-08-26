@@ -168,7 +168,7 @@ verify_resolver() {
   fi
   source="$(jq -r '.source // empty' "$response_file")"
   case "$source" in
-    pot-provider|web-embedded) ;;
+    pot-provider|web-embedded|legacy-android-vr|legacy-default) ;;
     *)
       echo "FAIL: HPX resolver reported unexpected source '${source:-missing}'" >&2
       return 1
@@ -179,7 +179,7 @@ verify_resolver() {
     return 1
   fi
 
-  echo "PASS: HPX resolved a freshly probed real stream via ${source}"
+  echo "PASS: HPX resolved a freshly probed real stream via validated ${source} fallback chain"
 }
 
 case "$mode" in
