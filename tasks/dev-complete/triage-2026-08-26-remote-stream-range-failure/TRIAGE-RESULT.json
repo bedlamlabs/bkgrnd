@@ -1,0 +1,109 @@
+{
+  "version": "1.0",
+  "triage_date": "2026-08-26T15:43:24Z",
+  "intake": {
+    "approved": true,
+    "approved_at": "2026-08-26T15:43:24Z",
+    "issue_count": 2
+  },
+  "issues": [
+    {
+      "id": "ISSUE-1",
+      "severity": "P0",
+      "domains": ["api"],
+      "category": "API",
+      "route": "/api/v1/stream?proxy=true",
+      "description": "Ordinary YouTube audio fails remotely because HPX requests upstream progressive ranges larger than YouTube currently accepts.",
+      "status": "fixed",
+      "reproduction": {
+        "method": "curl",
+        "command": "authenticated curl range matrix against production /api/v1/stream?proxy=true",
+        "output_artifact": "evidence/issue-1-production-red.txt"
+      },
+      "classification": "bug",
+      "acceptance_test": {
+        "id": "AT-1",
+        "criterion": "A real ordinary YouTube stream serves open-ended and sequential ranges without HTTP 502 and remains available beyond the former cutoff.",
+        "verify": {
+          "localhost": {
+            "primary": {
+              "tool": "cargo-test",
+              "cmd": "cargo test --manifest-path server/Cargo.toml",
+              "expect": "exit_0"
+            }
+          },
+          "production": {
+            "primary": {
+              "tool": "curl",
+              "cmd": "authenticated sequential range probe against https://bkgrnd.bedl.am/api/v1/stream?proxy=true",
+              "expect": "exit_0"
+            }
+          }
+        }
+      },
+      "root_cause": {
+        "file": "server/src/main.rs",
+        "line": 1129,
+        "explanation": "The progressive proxy forced 8 MiB upstream ranges, while production YouTube responses now reject ranges above a source-dependent ceiling with 403; HPX translated that into 502 for the phone."
+      },
+      "fix": {
+        "files_changed": ["server/src/main.rs"],
+        "test_file": "server/src/main.rs"
+      }
+    },
+    {
+      "id": "ISSUE-2",
+      "severity": "P0",
+      "domains": ["api", "deployment"],
+      "category": "API / Runtime",
+      "route": "HPX yt-dlp resolver",
+      "description": "HPX remote streaming lacks the patched POT provider and ordered web-embedded/legacy fallback already approved for YouTube playback.",
+      "status": "fixed",
+      "reproduction": {
+        "method": "curl",
+        "command": "authenticated 64 KiB production range probes against saved ordinary streams",
+        "output_artifact": "evidence/issue-2-production-red.txt"
+      },
+      "classification": "bug",
+      "acceptance_test": {
+        "id": "AT-2",
+        "criterion": "HPX resolves ordinary YouTube streams through pinned POT, web-embedded, then legacy strategies and serves playable remote bytes.",
+        "verify": {
+          "localhost": {
+            "primary": {
+              "tool": "cargo-test",
+              "cmd": "cargo test --manifest-path server/Cargo.toml",
+              "expect": "exit_0"
+            }
+          },
+          "production": {
+            "primary": {
+              "tool": "curl",
+              "cmd": "authenticated saved-stream matrix against https://bkgrnd.bedl.am/api/v1/stream?proxy=true",
+              "expect": "exit_0"
+            }
+          }
+        }
+      },
+      "root_cause": {
+        "file": "server/src/main.rs",
+        "line": 1720,
+        "explanation": "The HPX resolver never received the pinned POT provider or web-embedded fallback and accepted nonempty yt-dlp output without proving the media URL was usable, so exit-zero 403 candidates were cached as successes."
+      },
+      "fix": {
+        "files_changed": [
+          "server/src/main.rs",
+          "Dockerfile",
+          "server/container-entrypoint.sh"
+        ],
+        "test_file": "server/src/main.rs"
+      }
+    }
+  ],
+  "summary": {
+    "total": 2,
+    "bugs": 2,
+    "regressions": 0,
+    "all_closed": false
+  }
+}

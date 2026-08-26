@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "finding_fingerprint": "de7cc95d4c38b0ecd370d6b9eebc0b75d46c0bc8f916b98a05a025b079a1a1ba",
+  "original_agent": "codex-reviewer",
+  "validation_agent": "validation-agent-de7cc95d4c38b0ecd370d6b9eebc0b75d46c0bc8f916b98a05a025b079a1a1ba",
+  "provider": "codex",
+  "verdict": "REAL",
+  "confidence": 99,
+  "score": 99,
+  "notes": "`probe_direct_stream_url` sends only `bytes=0-0` and accepts any 2xx; the URL is then cached. Playback later requests 1 MiB, validates `206`/`Content-Range`, and returns 502 on failure without trying the next resolver strategy. The fallback test explicitly expects only `bytes=0-0`, so the task’s no-502 playback contract lacks this regression coverage.",
+  "timestamp": "2026-08-26T16:26:00.803Z",
+  "generated_by": "hosaka-review-runner.mjs",
+  "runner_hash": "e1c02b6a85b2bc7dcb52721e0782f74af00289dfcd7acc24a275da2b8b484fda"
+}

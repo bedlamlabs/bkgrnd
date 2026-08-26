@@ -1,0 +1,15 @@
+{
+  "version": "1.0",
+  "transition": "code-complete->dev-complete",
+  "task_path": "/Users/geoffmccaleb/bkgrnd/tasks/code-complete/triage-2026-08-26-remote-stream-range-failure",
+  "workflow_mode": "turbo",
+  "bypass_questions": "forbidden",
+  "prerequisites": [
+    {
+      "predicate": "qa_complete",
+      "owner": "scripts/helga-gate.sh",
+      "command": "bash ~/.hosaka/scripts/helga-gate.sh \"/Users/geoffmccaleb/bkgrnd/tasks/code-complete/triage-2026-08-26-remote-stream-range-failure\""
+    }
+  ],
+  "generated_by": "hosaka-gate-plan.sh"
+}

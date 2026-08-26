@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "finding_fingerprint": "6fdbc7c09fd767608a0ace3f4d166af495a1aff8423a6ad4a5fc390ae2fd9519",
+  "original_agent": "codex-reviewer",
+  "validation_agent": "validation-agent-6fdbc7c09fd767608a0ace3f4d166af495a1aff8423a6ad4a5fc390ae2fd9519",
+  "provider": "codex",
+  "verdict": "REAL",
+  "confidence": 100,
+  "score": 100,
+  "notes": "Dockerfile copies server/container-entrypoint.sh, but git reports it as untracked and git ls-files omits it. Local build/shell tests include worktree files and do not prevent omission; the contract requires deployment from the GitHub checkout.",
+  "timestamp": "2026-08-26T16:26:27.721Z",
+  "generated_by": "hosaka-review-runner.mjs",
+  "runner_hash": "e1c02b6a85b2bc7dcb52721e0782f74af00289dfcd7acc24a275da2b8b484fda"
+}

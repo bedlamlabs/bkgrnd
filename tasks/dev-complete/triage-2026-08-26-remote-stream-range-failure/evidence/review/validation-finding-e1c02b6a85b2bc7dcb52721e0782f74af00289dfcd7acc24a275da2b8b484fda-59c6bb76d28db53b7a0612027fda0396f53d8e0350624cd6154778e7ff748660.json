@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "finding_fingerprint": "59c6bb76d28db53b7a0612027fda0396f53d8e0350624cd6154778e7ff748660",
+  "original_agent": "codex-reviewer",
+  "validation_agent": "validation-agent-59c6bb76d28db53b7a0612027fda0396f53d8e0350624cd6154778e7ff748660",
+  "provider": "codex",
+  "verdict": "REAL",
+  "confidence": 98,
+  "score": 98,
+  "notes": "`verify_resolver` explicitly passes both legacy sources for the ordinary primary video; AT-2 requires deployed POT-first/embedded fallback behavior, while localhost tests cannot prove the production provider is present or attempted.",
+  "timestamp": "2026-08-26T16:52:19.128Z",
+  "generated_by": "hosaka-review-runner.mjs",
+  "runner_hash": "e1c02b6a85b2bc7dcb52721e0782f74af00289dfcd7acc24a275da2b8b484fda"
+}

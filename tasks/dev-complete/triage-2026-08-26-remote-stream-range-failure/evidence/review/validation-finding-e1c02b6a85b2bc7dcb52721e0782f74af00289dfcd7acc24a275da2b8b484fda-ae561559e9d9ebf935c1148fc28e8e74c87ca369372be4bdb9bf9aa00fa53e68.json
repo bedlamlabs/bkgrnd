@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "finding_fingerprint": "ae561559e9d9ebf935c1148fc28e8e74c87ca369372be4bdb9bf9aa00fa53e68",
+  "original_agent": "codex-reviewer",
+  "validation_agent": "validation-agent-ae561559e9d9ebf935c1148fc28e8e74c87ca369372be4bdb9bf9aa00fa53e68",
+  "provider": "codex",
+  "verdict": "REAL",
+  "confidence": 99,
+  "score": 99,
+  "notes": "Dockerfile/main.rs pass the zip itself; pinned yt-dlp rejects non-directory `--plugin-dirs` values. Existing tests check strategy order/zip presence, not runtime plugin loading; the task contract requires POT-first behavior.",
+  "timestamp": "2026-08-26T16:38:03.087Z",
+  "generated_by": "hosaka-review-runner.mjs",
+  "runner_hash": "e1c02b6a85b2bc7dcb52721e0782f74af00289dfcd7acc24a275da2b8b484fda"
+}

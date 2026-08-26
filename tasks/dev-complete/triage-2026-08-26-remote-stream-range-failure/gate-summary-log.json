@@ -1,0 +1,12 @@
+[
+  {
+    "gate": "CODE_COMPLETE",
+    "timestamp": "2026-08-26T16:58:17Z",
+    "task_id": "triage-2026-08-26-remote-stream-range-failure"
+  },
+  {
+    "gate": "QA",
+    "timestamp": "2026-08-26T17:14:39Z",
+    "task_id": "triage-2026-08-26-remote-stream-range-failure"
+  }
+]

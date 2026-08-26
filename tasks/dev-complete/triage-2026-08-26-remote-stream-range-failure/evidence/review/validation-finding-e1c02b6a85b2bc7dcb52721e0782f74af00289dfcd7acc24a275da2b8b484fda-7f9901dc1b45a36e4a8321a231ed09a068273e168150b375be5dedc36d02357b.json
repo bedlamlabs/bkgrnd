@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "finding_fingerprint": "7f9901dc1b45a36e4a8321a231ed09a068273e168150b375be5dedc36d02357b",
+  "original_agent": "qwen30-reviewer",
+  "validation_agent": "validation-agent-7f9901dc1b45a36e4a8321a231ed09a068273e168150b375be5dedc36d02357b",
+  "provider": "codex",
+  "verdict": "FALSE",
+  "confidence": 99,
+  "score": 1,
+  "notes": "The cited C++ test/file and HPX distributed backend do not exist; HPX is the deployment host. Rust tests in server/src/main.rs cover partial/undersized chunks, sequential ranges, malformed/reversed/overflowing offsets, invalid Content-Range, and EOF boundaries required by the task contract; concurrent/overlapping requests are out of scope.",
+  "timestamp": "2026-08-26T16:39:07.960Z",
+  "generated_by": "hosaka-review-runner.mjs",
+  "runner_hash": "e1c02b6a85b2bc7dcb52721e0782f74af00289dfcd7acc24a275da2b8b484fda"
+}

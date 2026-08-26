@@ -1,0 +1,28 @@
+Production reproduction: 2026-08-26T15:39Z
+Method: curl
+Route: https://bkgrnd.bedl.am/api/v1/stream?proxy=true
+Source: https://www.youtube.com/watch?v=QhMs-t7EhXY
+
+The bearer token was read from the installed bkgrnd configuration and was not
+printed. Each request used an explicit byte range and discarded the media body.
+
+MiB=1 HTTP=206 bytes=1048576 total=2.054752
+MiB=2 HTTP=206 bytes=2097152 total=0.436011
+MiB=3 HTTP=502 bytes=16 total=3.648472
+MiB=4 HTTP=502 bytes=16 total=3.294162
+MiB=6 HTTP=502 bytes=16 total=2.164085
+MiB=8 HTTP=502 bytes=16 total=1.587489
+
+An open-ended request, matching the iOS/Safari shape, also failed:
+
+bytes=0- HTTP=502 bytes=16 total=1.722804
+
+Control proof for the surviving live-HLS branch:
+
+Lcdi9O2XB4E HTTP=200 bytes=9299 total=1.609684
+content-type: application/vnd.apple.mpegurl
+
+Observed behavior: ordinary progressive media succeeds only through 2 MiB, but
+the server requests 8 MiB upstream chunks. The route returns 502 before the
+client can start or when it asks for its next range. Live HLS does not use the
+progressive-range branch and remains playable.

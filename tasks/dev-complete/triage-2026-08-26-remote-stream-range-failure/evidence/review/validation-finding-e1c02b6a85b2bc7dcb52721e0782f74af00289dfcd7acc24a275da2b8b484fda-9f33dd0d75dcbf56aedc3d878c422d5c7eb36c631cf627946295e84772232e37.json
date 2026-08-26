@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "finding_fingerprint": "9f33dd0d75dcbf56aedc3d878c422d5c7eb36c631cf627946295e84772232e37",
+  "original_agent": "qwen30-reviewer",
+  "validation_agent": "validation-agent-9f33dd0d75dcbf56aedc3d878c422d5c7eb36c631cf627946295e84772232e37",
+  "provider": "codex",
+  "verdict": "FALSE",
+  "confidence": 100,
+  "score": 0,
+  "notes": "`src/remote_stream.cpp` and HPX C++ code do not exist; HPX is the deployment host. Range streaming is Rust/Tokio in `server/src/main.rs`, with async fetching and boundary/partial-response tests matching the task contract.",
+  "timestamp": "2026-08-26T16:27:23.476Z",
+  "generated_by": "hosaka-review-runner.mjs",
+  "runner_hash": "e1c02b6a85b2bc7dcb52721e0782f74af00289dfcd7acc24a275da2b8b484fda"
+}

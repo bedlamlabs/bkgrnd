@@ -1,0 +1,25 @@
+Production reproduction: 2026-08-26T15:47Z
+Method: curl
+Route: https://bkgrnd.bedl.am/api/v1/stream?proxy=true
+
+The bearer token was read from the installed bkgrnd configuration and was not
+printed. Nine saved ordinary YouTube URLs were probed with a 1 MiB range:
+
+2Wi3k4Z6Xqs HTTP=206 bytes=1048576
+2gPJTbPTCsg HTTP=206 bytes=1048576
+BGxSmf7e6ZA HTTP=206 bytes=1048576
+BLc3VFOiBao HTTP=206 bytes=1048576
+CUg_GK6TvGE HTTP=502 bytes=16
+Dg0IjOzopYU HTTP=502 bytes=16
+FTcE_EuUjM8 HTTP=502 bytes=16
+GILLWpsm7y4 HTTP=400 bytes=44
+J9aEIYkiOtQ HTTP=502 bytes=16
+
+The four 502 sources were then probed down to 64 KiB. Three remained 502 at
+every range size, proving their failure is an unusable resolved media URL and
+not only the 8 MiB proxy ceiling. FTcE_EuUjM8 succeeded at 64, 256, and 512 KiB
+but failed at 1 MiB, confirming both defects coexist in production.
+
+Source inspection confirms HPX uses only `android_vr` then yt-dlp defaults.
+The patched PR #243 POT provider and `web_embedded` fallback exist only in the
+Mac resolver and are absent from the HPX Docker image/runtime.

@@ -26,7 +26,9 @@ use tower_http::services::ServeDir;
 use tracing::{error, info, warn};
 
 const YTDLP_RESOLVE_TIMEOUT: Duration = Duration::from_secs(60);
+const YTDLP_CANDIDATE_PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 const YTDLP_SEARCH_TIMEOUT: Duration = Duration::from_secs(30);
+const PROXY_CHUNK: u64 = 1024 * 1024;
 // yt-dlp forks a python + JS-runtime process per invocation; cap global
 // concurrency so a burst of clients can't exhaust the host.
 const YTDLP_MAX_CONCURRENCY: usize = 4;
@@ -55,6 +57,8 @@ struct AppState {
     session_secret: Arc<Vec<u8>>,
     users: Arc<Mutex<Vec<auth::User>>>,
     registration_open: bool,
+    #[cfg(test)]
+    allow_test_media_urls: bool,
 }
 
 /// Who is making a request. The bearer token (iOS app + Mac menubar) reads and
@@ -477,6 +481,51 @@ fn ytdlp_command() -> tokio::process::Command {
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| "yt-dlp".to_string());
     tokio::process::Command::new(bin)
+}
+
+fn build_http_client() -> reqwest::Result<reqwest::Client> {
+    reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(10))
+        // Signed media URLs must never redirect the server to an unvalidated
+        // destination. A redirect is treated as a failed candidate instead.
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+}
+
+fn is_allowed_youtube_source_url(value: &str) -> bool {
+    let Ok(parsed) = url::Url::parse(value) else {
+        return false;
+    };
+    let host = parsed.host_str().unwrap_or("").to_ascii_lowercase();
+    parsed.scheme() == "https"
+        && (host == "youtube.com" || host.ends_with(".youtube.com") || host == "youtu.be")
+}
+
+fn is_allowed_media_url(value: &str) -> bool {
+    let Ok(parsed) = url::Url::parse(value) else {
+        return false;
+    };
+    let host = parsed.host_str().unwrap_or("").to_ascii_lowercase();
+    parsed.scheme() == "https" && (host == "googlevideo.com" || host.ends_with(".googlevideo.com"))
+}
+
+fn state_allows_media_url(state: &AppState, value: &str) -> bool {
+    if is_allowed_media_url(value) {
+        return true;
+    }
+    #[cfg(test)]
+    {
+        if state.allow_test_media_urls {
+            return url::Url::parse(value)
+                .ok()
+                .and_then(|parsed| parsed.host_str().map(str::to_string))
+                .map(|host| host == "127.0.0.1" || host == "localhost" || host == "::1")
+                .unwrap_or(false);
+        }
+    }
+    #[cfg(not(test))]
+    let _ = state;
+    false
 }
 
 async fn health() -> impl IntoResponse {
@@ -903,6 +952,13 @@ async fn resolve_stream(
     if !state.authorized(&headers, q.token.as_deref()) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
+    if !is_allowed_youtube_source_url(&q.url) {
+        return (
+            StatusCode::BAD_REQUEST,
+            "A valid HTTPS YouTube URL is required.",
+        )
+            .into_response();
+    }
 
     let started_at = Instant::now();
     match resolve_stream_url(&state, &q.url).await {
@@ -927,6 +983,13 @@ async fn prewarm_stream(
 ) -> impl IntoResponse {
     if !state.authorized(&headers, q.token.as_deref()) {
         return StatusCode::UNAUTHORIZED.into_response();
+    }
+    if !is_allowed_youtube_source_url(&q.url) {
+        return (
+            StatusCode::BAD_REQUEST,
+            "A valid HTTPS YouTube URL is required.",
+        )
+            .into_response();
     }
 
     if q.refresh == Some(true) {
@@ -1007,25 +1070,70 @@ async fn thumbnail_image(
     resp
 }
 
-/// Parse an HTTP Range header of the form `bytes=START-[END]` (first range only),
-/// returning the start offset and optional end. Suffix ranges (`bytes=-N`) and malformed
-/// values fall back to `(0, None)`.
-fn parse_range_start_end(range: Option<&str>) -> (u64, Option<u64>) {
-    let Some(spec) = range.and_then(|r| r.trim().strip_prefix("bytes=")) else {
-        return (0, None);
+/// Parse the single progressive byte range that HPX supports. Missing Range
+/// means an open-ended request from byte zero; malformed, suffix, multi-range,
+/// reversed, and arithmetically overflowing ranges are rejected.
+fn parse_progressive_range(range: Option<&str>) -> Result<(u64, Option<u64>), ()> {
+    let Some(raw) = range else {
+        return Ok((0, None));
     };
-    let first = spec.split(',').next().unwrap_or("").trim();
-    let mut parts = first.splitn(2, '-');
-    let start = parts.next().unwrap_or("").trim().parse::<u64>().ok();
-    let end = parts
-        .next()
-        .map(str::trim)
-        .filter(|e| !e.is_empty())
-        .and_then(|e| e.parse::<u64>().ok());
-    match start {
-        Some(s) => (s, end),
-        None => (0, None),
+    let spec = raw.trim().strip_prefix("bytes=").ok_or(())?;
+    if spec.contains(',') {
+        return Err(());
     }
+    let (start_raw, end_raw) = spec.split_once('-').ok_or(())?;
+    if start_raw.is_empty() {
+        return Err(());
+    }
+    let start = start_raw.trim().parse::<u64>().map_err(|_| ())?;
+    // Every request is expanded to at least one bounded upstream chunk.
+    start.checked_add(PROXY_CHUNK - 1).ok_or(())?;
+    let end = if end_raw.trim().is_empty() {
+        None
+    } else {
+        let end = end_raw.trim().parse::<u64>().map_err(|_| ())?;
+        if end < start {
+            return Err(());
+        }
+        end.checked_sub(start)
+            .and_then(|span| span.checked_add(1))
+            .ok_or(())?;
+        Some(end)
+    };
+    Ok((start, end))
+}
+
+fn capped_response_stream(
+    response: reqwest::Response,
+    limit: u64,
+) -> impl futures_util::Stream<Item = Result<Bytes, std::io::Error>> + Send {
+    use futures_util::StreamExt;
+
+    futures_util::stream::unfold(
+        (response.bytes_stream(), limit),
+        |(mut stream, remaining)| async move {
+            if remaining == 0 {
+                return None;
+            }
+            match stream.next().await {
+                Some(Ok(bytes)) => {
+                    let take = usize::try_from(remaining)
+                        .unwrap_or(usize::MAX)
+                        .min(bytes.len());
+                    let bytes = bytes.slice(..take);
+                    Some((Ok(bytes), (stream, remaining - take as u64)))
+                }
+                Some(Err(error)) => Some((Err(std::io::Error::other(error)), (stream, 0))),
+                None => Some((
+                    Err(std::io::Error::new(
+                        std::io::ErrorKind::UnexpectedEof,
+                        "upstream body ended before its Content-Range span",
+                    )),
+                    (stream, 0),
+                )),
+            }
+        },
+    )
 }
 
 // Stable-ish endpoint: client asks for /stream?url=... and we resolve a fresh direct media URL and proxy bytes.
@@ -1042,6 +1150,13 @@ async fn stream_audio(
         .unwrap_or(false);
     if !cast_ok && !state.authorized(&headers, q.token.as_deref()) {
         return StatusCode::UNAUTHORIZED.into_response();
+    }
+    if !is_allowed_youtube_source_url(&q.url) {
+        return (
+            StatusCode::BAD_REQUEST,
+            "A valid HTTPS YouTube URL is required.",
+        )
+            .into_response();
     }
 
     // Resolve once per source URL for a short window. iOS Safari may issue multiple
@@ -1124,13 +1239,27 @@ async fn stream_audio(
     //      it requested as fatal (CoreMedia -12939 "content range mismatch").
     // So we advertise exactly the client's requested range, but fetch it
     // upstream in bounded chunks and relay them sequentially.
-    const PROXY_CHUNK: u64 = 8 * 1024 * 1024;
-    let (start, client_end) =
-        parse_range_start_end(headers.get(header::RANGE).and_then(|v| v.to_str().ok()));
+    // Production currently accepts ranges up to 2 MiB but returns 502 for
+    // ranges at or above 3 MiB. Keep enough headroom for upstream variation.
+    let range_header = match headers.get(header::RANGE) {
+        Some(value) => match value.to_str() {
+            Ok(value) => Some(value),
+            Err(_) => return StatusCode::RANGE_NOT_SATISFIABLE.into_response(),
+        },
+        None => None,
+    };
+    let (start, client_end) = match parse_progressive_range(range_header) {
+        Ok(range) => range,
+        Err(()) => return StatusCode::RANGE_NOT_SATISFIABLE.into_response(),
+    };
 
+    let chunk_ceiling = match start.checked_add(PROXY_CHUNK - 1) {
+        Some(end) => end,
+        None => return StatusCode::RANGE_NOT_SATISFIABLE.into_response(),
+    };
     let first_end = match client_end {
-        Some(e) => e.min(start + PROXY_CHUNK - 1),
-        None => start + PROXY_CHUNK - 1,
+        Some(e) => e.min(chunk_ceiling),
+        None => chunk_ceiling,
     };
     let first_attempt = state
         .http
@@ -1138,8 +1267,13 @@ async fn stream_audio(
         .header(header::RANGE, format!("bytes={}-{}", start, first_end))
         .send()
         .await;
+    let require_exact_first_end = client_end.is_some();
     let first = match first_attempt {
-        Ok(r) if r.status().is_success() || r.status().as_u16() == 206 => r,
+        Ok(r)
+            if valid_progressive_range_response(&r, start, first_end, require_exact_first_end) =>
+        {
+            r
+        }
         Ok(r) if resolved.cached && is_stale_stream_status(r.status()) => {
             warn!(
                 "upstream returned {} for cached stream url; re-resolving and retrying",
@@ -1160,7 +1294,16 @@ async fn stream_audio(
                 .send()
                 .await
             {
-                Ok(retry) if retry.status().is_success() || retry.status().as_u16() == 206 => retry,
+                Ok(retry)
+                    if valid_progressive_range_response(
+                        &retry,
+                        start,
+                        first_end,
+                        require_exact_first_end,
+                    ) =>
+                {
+                    retry
+                }
                 Ok(retry) => {
                     warn!(
                         "upstream returned {} after stream URL refresh; evicting cache entry",
@@ -1202,12 +1345,26 @@ async fn stream_audio(
         .get(header::CONTENT_RANGE)
         .and_then(|v| v.to_str().ok())
         .and_then(parse_content_range_total);
+    if client_end
+        .zip(total)
+        .is_some_and(|(requested_end, upstream_total)| requested_end >= upstream_total)
+    {
+        return StatusCode::RANGE_NOT_SATISFIABLE.into_response();
+    }
+    let Some(first_body_span) = progressive_response_span(&first) else {
+        return StatusCode::BAD_GATEWAY.into_response();
+    };
 
     match client_end {
         // Explicit range wider than one chunk: relay it chunk by chunk while
         // advertising the exact requested range.
         Some(cend) if cend > first_end => {
-            let span = cend - start + 1;
+            let Some(span) = cend
+                .checked_sub(start)
+                .and_then(|length| length.checked_add(1))
+            else {
+                return StatusCode::RANGE_NOT_SATISFIABLE.into_response();
+            };
             let total_label = total
                 .map(|t| t.to_string())
                 .unwrap_or_else(|| "*".to_string());
@@ -1221,9 +1378,17 @@ async fn stream_audio(
             tokio::spawn(async move {
                 use futures_util::StreamExt;
                 let mut current = Some(first);
-                let mut next_pos = first_end + 1;
+                let mut next_pos = first_end.checked_add(1);
                 'relay: while let Some(resp) = current.take() {
-                    let mut stream = resp.bytes_stream();
+                    let Some(response_span) = progressive_response_span(&resp) else {
+                        let _ = tx
+                            .send(Err(std::io::Error::other(
+                                "upstream content range disappeared",
+                            )))
+                            .await;
+                        break;
+                    };
+                    let mut stream = Box::pin(capped_response_stream(resp, response_span));
                     while let Some(item) = stream.next().await {
                         match item {
                             Ok(bytes) => {
@@ -1232,34 +1397,49 @@ async fn stream_audio(
                                 }
                             }
                             Err(e) => {
-                                let _ = tx
-                                    .send(Err(std::io::Error::new(std::io::ErrorKind::Other, e)))
-                                    .await;
+                                cache.lock().await.remove(&source_key);
+                                let _ = tx.send(Err(e)).await;
                                 break 'relay;
                             }
                         }
                     }
-                    if next_pos > cend {
+                    let Some(chunk_start) = next_pos else {
+                        break;
+                    };
+                    if chunk_start > cend {
                         break;
                     }
-                    let chunk_end = (next_pos + PROXY_CHUNK - 1).min(cend);
+                    let Some(chunk_ceiling) = chunk_start.checked_add(PROXY_CHUNK - 1) else {
+                        let _ = tx
+                            .send(Err(std::io::Error::other("upstream range overflow")))
+                            .await;
+                        break;
+                    };
+                    let chunk_end = chunk_ceiling.min(cend);
                     match http
                         .get(upstream_url.as_str())
-                        .header(header::RANGE, format!("bytes={}-{}", next_pos, chunk_end))
+                        .header(
+                            header::RANGE,
+                            format!("bytes={}-{}", chunk_start, chunk_end),
+                        )
                         .send()
                         .await
                     {
-                        Ok(r) if r.status().is_success() || r.status().as_u16() == 206 => {
+                        Ok(r)
+                            if valid_progressive_range_response(
+                                &r,
+                                chunk_start,
+                                chunk_end,
+                                true,
+                            ) =>
+                        {
                             current = Some(r);
-                            next_pos = chunk_end + 1;
+                            next_pos = chunk_end.checked_add(1);
                         }
                         _ => {
                             cache.lock().await.remove(&source_key);
                             let _ = tx
-                                .send(Err(std::io::Error::new(
-                                    std::io::ErrorKind::Other,
-                                    "upstream chunk failed",
-                                )))
+                                .send(Err(std::io::Error::other("upstream chunk failed")))
                                 .await;
                             break;
                         }
@@ -1291,11 +1471,13 @@ async fn stream_audio(
         // response as-is (open-ended clients pull follow-up ranges themselves).
         _ => {
             let status = first.status();
-            let content_length = first.headers().get(header::CONTENT_LENGTH).cloned();
             let content_range = first.headers().get(header::CONTENT_RANGE).cloned();
             let mut resp = Response::builder()
                 .status(status)
-                .body(Body::from_stream(first.bytes_stream()))
+                .body(Body::from_stream(capped_response_stream(
+                    first,
+                    first_body_span,
+                )))
                 .unwrap();
             resp.headers_mut().insert(
                 header::CONTENT_TYPE,
@@ -1304,7 +1486,7 @@ async fn stream_audio(
             );
             resp.headers_mut()
                 .insert(header::ACCEPT_RANGES, HeaderValue::from_static("bytes"));
-            if let Some(v) = content_length {
+            if let Ok(v) = HeaderValue::from_str(&first_body_span.to_string()) {
                 resp.headers_mut().insert(header::CONTENT_LENGTH, v);
             }
             if let Some(v) = content_range {
@@ -1333,13 +1515,10 @@ async fn stream_segment(
     if !state.authorized(&headers, q.token.as_deref()) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
-    let Ok(parsed) = url::Url::parse(&q.url) else {
-        return StatusCode::BAD_REQUEST.into_response();
-    };
-    let host = parsed.host_str().unwrap_or("").to_ascii_lowercase();
-    if parsed.scheme() != "https" || !host.ends_with("googlevideo.com") {
+    if !is_allowed_media_url(&q.url) {
         return StatusCode::BAD_REQUEST.into_response();
     }
+    let parsed = url::Url::parse(&q.url).expect("validated media URL must parse");
 
     let mut req = state.http.get(parsed);
     if let Some(range) = headers.get(header::RANGE) {
@@ -1385,13 +1564,10 @@ async fn stream_segment_head(
     if !state.authorized(&headers, q.token.as_deref()) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
-    let Ok(parsed) = url::Url::parse(&q.url) else {
-        return StatusCode::BAD_REQUEST.into_response();
-    };
-    let host = parsed.host_str().unwrap_or("").to_ascii_lowercase();
-    if parsed.scheme() != "https" || !host.ends_with("googlevideo.com") {
+    if !is_allowed_media_url(&q.url) {
         return StatusCode::BAD_REQUEST.into_response();
     }
+    let parsed = url::Url::parse(&q.url).expect("validated media URL must parse");
 
     let upstream = match state.http.head(parsed.clone()).send().await {
         Ok(r) if r.status().is_success() || r.status().as_u16() == 206 => r,
@@ -1525,6 +1701,59 @@ fn parse_content_range_total(value: &str) -> Option<u64> {
     value.rsplit('/').next()?.trim().parse::<u64>().ok()
 }
 
+fn parse_content_range(value: &str) -> Option<(u64, u64, Option<u64>)> {
+    let value = value.strip_prefix("bytes ")?;
+    let (range, total) = value.split_once('/')?;
+    let (start, end) = range.split_once('-')?;
+    let start = start.parse::<u64>().ok()?;
+    let end = end.parse::<u64>().ok()?;
+    if end < start {
+        return None;
+    }
+    let total = if total == "*" {
+        None
+    } else {
+        let total = total.parse::<u64>().ok()?;
+        if total == 0 || end >= total {
+            return None;
+        }
+        Some(total)
+    };
+    Some((start, end, total))
+}
+
+fn valid_progressive_range_response(
+    response: &reqwest::Response,
+    requested_start: u64,
+    requested_end: u64,
+    require_exact_end: bool,
+) -> bool {
+    if response.status() != StatusCode::PARTIAL_CONTENT {
+        return false;
+    }
+    let Some((actual_start, actual_end, _)) = response
+        .headers()
+        .get(header::CONTENT_RANGE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(parse_content_range)
+    else {
+        return false;
+    };
+    actual_start == requested_start
+        && actual_end <= requested_end
+        && (!require_exact_end || actual_end == requested_end)
+}
+
+fn progressive_response_span(response: &reqwest::Response) -> Option<u64> {
+    let (start, end, _) = response
+        .headers()
+        .get(header::CONTENT_RANGE)?
+        .to_str()
+        .ok()
+        .and_then(parse_content_range)?;
+    end.checked_sub(start)?.checked_add(1)
+}
+
 async fn evict_stream_cache(state: &AppState, url: &str) {
     state.stream_cache.lock().await.remove(url);
 }
@@ -1558,11 +1787,18 @@ async fn resolve_stream_url(
     state: &AppState,
     url: &str,
 ) -> Result<ResolvedStream, StreamResolveError> {
+    if !is_allowed_youtube_source_url(url) {
+        return Err(StreamResolveError {
+            user_message: "A valid HTTPS YouTube URL is required.".to_string(),
+            technical_message: "source URL failed allowlist validation".to_string(),
+            terminal: true,
+        });
+    }
     let now = Instant::now();
     {
         let cache = state.stream_cache.lock().await;
         if let Some(cached) = cache.get(url) {
-            if cached.expires_at > now {
+            if cached.expires_at > now && state_allows_media_url(state, &cached.url) {
                 return Ok(ResolvedStream {
                     url: cached.url.clone(),
                     cached: true,
@@ -1596,7 +1832,7 @@ async fn resolve_stream_url(
     {
         let cache = state.stream_cache.lock().await;
         if let Some(cached) = cache.get(url) {
-            if cached.expires_at > Instant::now() {
+            if cached.expires_at > Instant::now() && state_allows_media_url(state, &cached.url) {
                 return Ok(ResolvedStream {
                     url: cached.url.clone(),
                     cached: true,
@@ -1622,7 +1858,10 @@ async fn resolve_stream_url(
     let mut resolved_source = "yt-dlp".to_string();
     let resolve_result: Result<String, StreamResolveError> =
         match resolve_direct_url(state, url).await {
-            Ok(url) => Ok(url),
+            Ok(resolved) => {
+                resolved_source = resolved.source.to_string();
+                Ok(resolved.url)
+            }
             Err(e) if e.terminal => {
                 let mut failures = state.stream_failures.lock().await;
                 let now = Instant::now();
@@ -1640,9 +1879,13 @@ async fn resolve_stream_url(
             Err(primary_error) => {
                 error!("resolve_direct_url failed: {primary_error}");
                 match resolve_via_piped(&state.http, url).await {
-                    Ok(fallback) => {
+                    Ok(fallback) if probe_direct_stream_url(state, &fallback).await => {
                         resolved_source = "piped".to_string();
                         Ok(fallback)
+                    }
+                    Ok(_) => {
+                        error!("resolve_via_piped returned an unusable media candidate");
+                        Err(primary_error)
                     }
                     Err(fallback_error) => {
                         error!("resolve_via_piped failed: {fallback_error:#}");
@@ -1711,12 +1954,144 @@ fn cache_ttl_for_stream_url(stream_url: &str) -> Duration {
     Duration::from_secs((expire - now - 300).min(90 * 60))
 }
 
-// Pinning a single fast player client avoids yt-dlp querying several clients
-// (its default), which is markedly faster per resolve. Falls back to default
-// extraction when the fast client fails. Mirrors the menubar app's resolver.
+const POT_PROVIDER_ARGS: &str = "youtubepot-bgutilhttp:base_url=http://127.0.0.1:4416";
 const FAST_PLAYER_CLIENT: &str = "youtube:player_client=android_vr";
 
-async fn resolve_direct_url(state: &AppState, url: &str) -> Result<String, StreamResolveError> {
+#[derive(Debug, Clone, Copy)]
+struct ResolverStrategySpec {
+    source: &'static str,
+    player_client: Option<&'static str>,
+    extractor_args: Option<&'static str>,
+}
+
+fn resolver_strategy_specs() -> [ResolverStrategySpec; 4] {
+    [
+        ResolverStrategySpec {
+            source: "pot-provider",
+            player_client: Some("mweb"),
+            extractor_args: Some(POT_PROVIDER_ARGS),
+        },
+        ResolverStrategySpec {
+            source: "web-embedded",
+            player_client: Some("web_embedded"),
+            extractor_args: None,
+        },
+        ResolverStrategySpec {
+            source: "legacy-android-vr",
+            player_client: Some("android_vr"),
+            extractor_args: None,
+        },
+        ResolverStrategySpec {
+            source: "legacy-default",
+            player_client: None,
+            extractor_args: None,
+        },
+    ]
+}
+
+#[derive(Debug)]
+struct DirectResolution {
+    url: String,
+    source: &'static str,
+}
+
+#[derive(Debug)]
+enum YtdlpCommandError {
+    Spawn(String),
+    Timeout,
+}
+
+async fn run_ytdlp_command(
+    mut command: tokio::process::Command,
+    deadline: Duration,
+) -> Result<std::process::Output, YtdlpCommandError> {
+    // Dropping the timed-out output future must terminate and reap its child;
+    // otherwise each fallback can leave a yt-dlp process running for minutes.
+    command.kill_on_drop(true);
+    match timeout(deadline, command.output()).await {
+        Ok(Ok(output)) => Ok(output),
+        Ok(Err(error)) => Err(YtdlpCommandError::Spawn(error.to_string())),
+        Err(_) => Err(YtdlpCommandError::Timeout),
+    }
+}
+
+async fn probe_direct_stream_url(state: &AppState, direct_url: &str) -> bool {
+    if !state_allows_media_url(state, direct_url) {
+        return false;
+    }
+    let is_hls = direct_url.contains("/manifest/")
+        || direct_url.contains("hls_playlist")
+        || direct_url.contains(".m3u8");
+    if is_hls {
+        return matches!(
+            timeout(
+                YTDLP_CANDIDATE_PROBE_TIMEOUT,
+                state.http.get(direct_url).send()
+            )
+            .await,
+            Ok(Ok(response)) if response.status().is_success()
+        );
+    }
+
+    let probe_end = PROXY_CHUNK - 1;
+    let probe = async {
+        let Ok(response) = state
+            .http
+            .get(direct_url)
+            .header(header::RANGE, format!("bytes=0-{probe_end}"))
+            .send()
+            .await
+        else {
+            return false;
+        };
+        if !valid_progressive_range_response(&response, 0, probe_end, false) {
+            return false;
+        }
+        let Some((_, actual_end, total)) = response
+            .headers()
+            .get(header::CONTENT_RANGE)
+            .and_then(|value| value.to_str().ok())
+            .and_then(parse_content_range)
+        else {
+            return false;
+        };
+        // A shorter response is valid only when Content-Range proves that it
+        // reached EOF (for genuinely small media); otherwise it is the same
+        // truncated first chunk that causes playback to fail.
+        if actual_end != probe_end && total != actual_end.checked_add(1) {
+            return false;
+        }
+        let Some(response_span) = progressive_response_span(&response) else {
+            return false;
+        };
+
+        use futures_util::StreamExt;
+        let mut received = 0_u64;
+        let mut body = Box::pin(capped_response_stream(response, response_span));
+        while let Some(item) = body.next().await {
+            let Ok(bytes) = item else {
+                return false;
+            };
+            let Ok(length) = u64::try_from(bytes.len()) else {
+                return false;
+            };
+            let Some(next) = received.checked_add(length) else {
+                return false;
+            };
+            received = next;
+        }
+        received == response_span
+    };
+    matches!(
+        timeout(YTDLP_CANDIDATE_PROBE_TIMEOUT, probe).await,
+        Ok(true)
+    )
+}
+
+async fn resolve_direct_url(
+    state: &AppState,
+    url: &str,
+) -> Result<DirectResolution, StreamResolveError> {
     // Prefer iOS-friendly audio first (m4a/mp4a), then generic bestaudio, then best.
     // WebM/Opus can work in some players but is flaky in iOS Safari.
     let format = "bestaudio[ext=m4a]/bestaudio[acodec^=mp4a]/bestaudio/best";
@@ -1727,11 +2102,24 @@ async fn resolve_direct_url(state: &AppState, url: &str) -> Result<String, Strea
     let _permit = state.ytdlp_sem.acquire().await;
 
     let mut last_error: Option<StreamResolveError> = None;
-    for fast in [true, false] {
+    for strategy in resolver_strategy_specs() {
         let mut cmd = ytdlp_command();
         cmd.args(["-f", format, "--get-url", "--no-playlist"]);
-        if fast {
-            cmd.args(["--extractor-args", FAST_PLAYER_CLIENT]);
+        if strategy.source == "pot-provider" {
+            let plugin_dir = std::env::var("WOPR_YTDLP_PLUGIN_DIR")
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or_else(|| "/opt/yt-dlp-plugins".to_string());
+            cmd.args(["--plugin-dirs", plugin_dir.as_str()]);
+        }
+        if let Some(extractor_args) = strategy.extractor_args {
+            cmd.args(["--extractor-args", extractor_args]);
+        }
+        if let Some(player_client) = strategy.player_client {
+            cmd.args([
+                "--extractor-args",
+                format!("youtube:player_client={player_client}").as_str(),
+            ]);
         }
 
         // Optional: YouTube increasingly requires a JS runtime for extraction.
@@ -1753,24 +2141,28 @@ async fn resolve_direct_url(state: &AppState, url: &str) -> Result<String, Strea
 
         cmd.arg(url);
 
-        let out = match timeout(YTDLP_RESOLVE_TIMEOUT, cmd.output()).await {
-            Ok(Ok(out)) => out,
-            Ok(Err(e)) => {
-                return Err(StreamResolveError {
+        let out = match run_ytdlp_command(cmd, YTDLP_RESOLVE_TIMEOUT).await {
+            Ok(out) => out,
+            Err(YtdlpCommandError::Spawn(error)) => {
+                last_error = Some(StreamResolveError {
                     user_message: "Could not start YouTube stream resolver.".to_string(),
-                    technical_message: e.to_string(),
+                    technical_message: error,
                     terminal: false,
                 });
+                warn!(
+                    "{} resolver process could not start, trying fallback",
+                    strategy.source
+                );
+                continue;
             }
-            Err(_) => {
-                return Err(StreamResolveError {
+            Err(YtdlpCommandError::Timeout) => {
+                last_error = Some(StreamResolveError {
                     user_message: "YouTube stream resolver timed out.".to_string(),
-                    technical_message: format!(
-                        "yt-dlp exceeded {}s",
-                        YTDLP_RESOLVE_TIMEOUT.as_secs()
-                    ),
+                    technical_message: format!("{} exceeded resolver deadline", strategy.source),
                     terminal: false,
                 });
+                warn!("{} timed out, trying fallback", strategy.source);
+                continue;
             }
         };
 
@@ -1778,7 +2170,26 @@ async fn resolve_direct_url(state: &AppState, url: &str) -> Result<String, Strea
             let stdout = String::from_utf8_lossy(&out.stdout);
             let direct = stdout.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
             if !direct.trim().is_empty() {
-                return Ok(direct.trim().to_string());
+                let direct = direct.trim();
+                if probe_direct_stream_url(state, direct).await {
+                    return Ok(DirectResolution {
+                        url: direct.to_string(),
+                        source: strategy.source,
+                    });
+                }
+                warn!(
+                    "{} returned an unusable media URL, trying fallback",
+                    strategy.source
+                );
+                last_error = Some(StreamResolveError {
+                    user_message: "YouTube returned an unusable stream URL.".to_string(),
+                    technical_message: format!(
+                        "{} candidate failed bounded media probe",
+                        strategy.source
+                    ),
+                    terminal: false,
+                });
+                continue;
             }
             last_error = Some(StreamResolveError {
                 user_message: "YouTube did not return a playable stream URL.".to_string(),
@@ -1790,14 +2201,10 @@ async fn resolve_direct_url(state: &AppState, url: &str) -> Result<String, Strea
 
         let stderr = String::from_utf8_lossy(&out.stderr);
         let err = classify_ytdlp_error(&stderr);
-        if err.terminal {
-            // Private/unavailable/age-restricted fail identically on every
-            // player client; don't burn a second resolve.
-            return Err(err);
-        }
-        if fast {
-            warn!("fast player client failed, falling back to default extraction");
-        }
+        warn!(
+            "{} resolver strategy failed, trying fallback",
+            strategy.source
+        );
         last_error = Some(err);
     }
 
@@ -1917,6 +2324,25 @@ struct PipedStreamsResponse {
     audio_streams: Vec<PipedAudioStream>,
 }
 
+fn allowed_piped_api_base(value: &str) -> Option<url::Url> {
+    let parsed = url::Url::parse(value.trim()).ok()?;
+    let host_allowed = match parsed.host()? {
+        url::Host::Domain(host) => {
+            let host = host.to_ascii_lowercase();
+            host != "localhost" && !host.ends_with(".localhost")
+        }
+        // Literal IP origins are unnecessary for configured public Piped
+        // instances and create a direct route to loopback/private/link-local
+        // services. Matching Url::Host also handles bracketed IPv6 correctly.
+        url::Host::Ipv4(_) | url::Host::Ipv6(_) => false,
+    };
+    (parsed.scheme() == "https"
+        && parsed.username().is_empty()
+        && parsed.password().is_none()
+        && host_allowed)
+        .then_some(parsed)
+}
+
 async fn resolve_via_piped(http: &reqwest::Client, url: &str) -> anyhow::Result<String> {
     let base = std::env::var("WOPR_PIPED_API_BASE")
         .ok()
@@ -1924,6 +2350,7 @@ async fn resolve_via_piped(http: &reqwest::Client, url: &str) -> anyhow::Result<
     if base.trim().is_empty() {
         anyhow::bail!("WOPR_PIPED_API_BASE not set");
     }
+    allowed_piped_api_base(&base).context("WOPR_PIPED_API_BASE must be a public HTTPS origin")?;
     let vid = extract_youtube_id(url).context("could not extract youtube id")?;
     let endpoint = format!("{}/streams/{}", base.trim_end_matches('/'), vid);
 
@@ -2259,10 +2686,7 @@ async fn main() -> anyhow::Result<()> {
         if registration_open { "OPEN" } else { "closed" }
     );
 
-    let http = reqwest::Client::builder()
-        .connect_timeout(std::time::Duration::from_secs(10))
-        .build()
-        .context("failed to build reqwest client")?;
+    let http = build_http_client().context("failed to build reqwest client")?;
 
     let state = AppState {
         data_dir,
@@ -2281,6 +2705,8 @@ async fn main() -> anyhow::Result<()> {
         session_secret: Arc::new(session_secret),
         users: Arc::new(Mutex::new(users)),
         registration_open,
+        #[cfg(test)]
+        allow_test_media_urls: false,
     };
 
     let web_dir = find_web_dir();
@@ -2366,6 +2792,7 @@ mod tests {
             session_secret: Arc::new(b"test-session-secret".to_vec()),
             users: Arc::new(Mutex::new(vec![])),
             registration_open: false,
+            allow_test_media_urls: true,
         }
     }
 
@@ -2482,27 +2909,281 @@ mod tests {
         assert_eq!(status, StatusCode::PARTIAL_CONTENT);
         assert_eq!(&body[..], b"fresh-audio");
         assert_eq!(stale_hits.load(Ordering::SeqCst), 1);
-        assert_eq!(fresh_hits.load(Ordering::SeqCst), 1);
+        // One bounded probe validates the newly resolved URL before the
+        // playback request fetches it.
+        assert_eq!(fresh_hits.load(Ordering::SeqCst), 2);
         assert_eq!(
             state.stream_cache.lock().await.get(source_url).unwrap().url,
             format!("http://{address}/fresh")
         );
     }
 
+    #[tokio::test]
+    async fn progressive_open_ended_range_uses_one_mib_upstream_chunk() {
+        const ONE_MIB: u64 = 1024 * 1024;
+        const PRODUCTION_CEILING: u64 = 2 * 1024 * 1024;
+
+        let requested_ranges = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let app = Router::new().route(
+            "/audio",
+            get({
+                let requested_ranges = requested_ranges.clone();
+                move |headers: HeaderMap| {
+                    let requested_ranges = requested_ranges.clone();
+                    async move {
+                        let range = headers
+                            .get(header::RANGE)
+                            .and_then(|value| value.to_str().ok())
+                            .unwrap_or("")
+                            .to_string();
+                        requested_ranges.lock().unwrap().push(range.clone());
+                        let (start, end) = parse_progressive_range(Some(&range)).unwrap();
+                        let Some(end) = end else {
+                            return StatusCode::BAD_GATEWAY.into_response();
+                        };
+                        let span = end.saturating_sub(start) + 1;
+                        if span > PRODUCTION_CEILING {
+                            return StatusCode::BAD_GATEWAY.into_response();
+                        }
+
+                        Response::builder()
+                            .status(StatusCode::PARTIAL_CONTENT)
+                            .header(header::CONTENT_TYPE, "audio/mp4")
+                            .header(header::CONTENT_LENGTH, span.to_string())
+                            .header(
+                                header::CONTENT_RANGE,
+                                format!("bytes {start}-{end}/10485760"),
+                            )
+                            .body(Body::from(vec![0_u8; span as usize]))
+                            .unwrap()
+                            .into_response()
+                    }
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let state = test_state(reqwest::Client::new());
+        let source_url = "https://www.youtube.com/watch?v=range-ceiling-test";
+        state.stream_cache.lock().await.insert(
+            source_url.to_string(),
+            CachedStreamUrl {
+                url: format!("http://{address}/audio"),
+                expires_at: Instant::now() + Duration::from_secs(60),
+            },
+        );
+        let mut headers = HeaderMap::new();
+        headers.insert(header::RANGE, HeaderValue::from_static("bytes=0-"));
+
+        let response = stream_audio(
+            State(state),
+            headers,
+            Query(StreamQuery {
+                url: source_url.to_string(),
+                token: None,
+                proxy: Some(true),
+                castsig: None,
+            }),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
+        assert_eq!(
+            requested_ranges.lock().unwrap().as_slice(),
+            &[format!("bytes=0-{}", ONE_MIB - 1)]
+        );
+    }
+
+    #[tokio::test]
+    async fn progressive_explicit_range_caps_oversized_upstream_chunks() {
+        const ONE_MIB: u64 = 1024 * 1024;
+        let requested_ranges = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let app = Router::new().route(
+            "/audio",
+            get({
+                let requested_ranges = requested_ranges.clone();
+                move |headers: HeaderMap| {
+                    let requested_ranges = requested_ranges.clone();
+                    async move {
+                        let range = headers
+                            .get(header::RANGE)
+                            .and_then(|value| value.to_str().ok())
+                            .unwrap_or("")
+                            .to_string();
+                        requested_ranges.lock().unwrap().push(range.clone());
+                        let (start, end) = parse_progressive_range(Some(&range)).unwrap();
+                        let end = end.unwrap();
+                        let span = end - start + 1;
+                        Response::builder()
+                            .status(StatusCode::PARTIAL_CONTENT)
+                            .header(header::CONTENT_TYPE, "audio/mp4")
+                            .header(header::CONTENT_LENGTH, (span + 257).to_string())
+                            .header(
+                                header::CONTENT_RANGE,
+                                format!("bytes {start}-{end}/10485760"),
+                            )
+                            .body(Body::from(vec![0_u8; (span + 257) as usize]))
+                            .unwrap()
+                    }
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let state = test_state(reqwest::Client::new());
+        let source_url = "https://www.youtube.com/watch?v=sequential-range-test";
+        state.stream_cache.lock().await.insert(
+            source_url.to_string(),
+            CachedStreamUrl {
+                url: format!("http://{address}/audio"),
+                expires_at: Instant::now() + Duration::from_secs(60),
+            },
+        );
+        let start = 100_u64;
+        let end = start + (2 * ONE_MIB) - 1;
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::RANGE,
+            HeaderValue::from_str(&format!("bytes={start}-{end}")).unwrap(),
+        );
+
+        let response = stream_audio(
+            State(state),
+            headers,
+            Query(StreamQuery {
+                url: source_url.to_string(),
+                token: None,
+                proxy: Some(true),
+                castsig: None,
+            }),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
+        assert_eq!(
+            response.headers().get(header::CONTENT_RANGE).unwrap(),
+            &format!("bytes {start}-{end}/10485760")
+        );
+        assert_eq!(
+            response.headers().get(header::CONTENT_LENGTH).unwrap(),
+            &(2 * ONE_MIB).to_string()
+        );
+        let body = to_bytes(response.into_body(), (2 * ONE_MIB + 1) as usize)
+            .await
+            .unwrap();
+        assert_eq!(body.len(), (2 * ONE_MIB) as usize);
+        assert_eq!(
+            requested_ranges.lock().unwrap().as_slice(),
+            &[
+                format!("bytes={start}-{}", start + ONE_MIB - 1),
+                format!("bytes={}-{}", start + ONE_MIB, end),
+            ]
+        );
+    }
+
+    async fn assert_sequential_undersized_chunk_fails(undersized_chunk: usize) {
+        let request_index = Arc::new(AtomicUsize::new(0));
+        let app = Router::new().route(
+            "/audio",
+            get({
+                let request_index = request_index.clone();
+                move |headers: HeaderMap| {
+                    let request_index = request_index.clone();
+                    async move {
+                        let index = request_index.fetch_add(1, Ordering::SeqCst);
+                        let range = headers
+                            .get(header::RANGE)
+                            .and_then(|value| value.to_str().ok())
+                            .unwrap();
+                        let (start, end) = parse_progressive_range(Some(range)).unwrap();
+                        let end = end.unwrap();
+                        let span = end - start + 1;
+                        let body_len = if index == undersized_chunk {
+                            span - 1
+                        } else {
+                            span
+                        };
+                        Response::builder()
+                            .status(StatusCode::PARTIAL_CONTENT)
+                            .header(
+                                header::CONTENT_RANGE,
+                                format!("bytes {start}-{end}/10485760"),
+                            )
+                            .body(Body::from(vec![0_u8; body_len as usize]))
+                            .unwrap()
+                    }
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let state = test_state(reqwest::Client::new());
+        let source_url = format!("https://www.youtube.com/watch?v=short-chunk-{undersized_chunk}");
+        state.stream_cache.lock().await.insert(
+            source_url.clone(),
+            CachedStreamUrl {
+                url: format!("http://{address}/audio"),
+                expires_at: Instant::now() + Duration::from_secs(60),
+            },
+        );
+        let requested_end = (2 * PROXY_CHUNK) - 1;
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::RANGE,
+            HeaderValue::from_str(&format!("bytes=0-{requested_end}")).unwrap(),
+        );
+        let response = stream_audio(
+            State(state.clone()),
+            headers,
+            Query(StreamQuery {
+                url: source_url.clone(),
+                token: None,
+                proxy: Some(true),
+                castsig: None,
+            }),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
+        assert!(
+            to_bytes(response.into_body(), (2 * PROXY_CHUNK + 1) as usize)
+                .await
+                .is_err()
+        );
+        assert!(!state.stream_cache.lock().await.contains_key(&source_url));
+    }
+
+    #[tokio::test]
+    async fn progressive_sequential_relay_rejects_early_eof_in_first_chunk() {
+        assert_sequential_undersized_chunk_fails(0).await;
+    }
+
+    #[tokio::test]
+    async fn progressive_sequential_relay_rejects_early_eof_in_final_chunk() {
+        assert_sequential_undersized_chunk_fails(1).await;
+    }
+
     #[test]
     fn parses_range_headers() {
-        assert_eq!(parse_range_start_end(None), (0, None));
-        assert_eq!(parse_range_start_end(Some("bytes=0-")), (0, None));
+        assert_eq!(parse_progressive_range(None), Ok((0, None)));
+        assert_eq!(parse_progressive_range(Some("bytes=0-")), Ok((0, None)));
         assert_eq!(
-            parse_range_start_end(Some("bytes=100-200")),
-            (100, Some(200))
+            parse_progressive_range(Some("bytes=100-200")),
+            Ok((100, Some(200)))
         );
-        assert_eq!(parse_range_start_end(Some("bytes=100-")), (100, None));
-        // Suffix and malformed ranges fall back to the start of the file.
-        assert_eq!(parse_range_start_end(Some("bytes=-500")), (0, None));
-        assert_eq!(parse_range_start_end(Some("garbage")), (0, None));
-        // Only the first range of a multi-range request is honored.
-        assert_eq!(parse_range_start_end(Some("bytes=5-9,20-30")), (5, Some(9)));
+        assert_eq!(parse_progressive_range(Some("bytes=100-")), Ok((100, None)));
+        assert!(parse_progressive_range(Some("bytes=-500")).is_err());
+        assert!(parse_progressive_range(Some("garbage")).is_err());
+        assert!(parse_progressive_range(Some("bytes=5-9,20-30")).is_err());
     }
 
     #[test]
@@ -2542,6 +3223,613 @@ mod tests {
         let unknown = classify_ytdlp_error("something exploded");
         assert!(!unknown.terminal);
         assert_eq!(unknown.user_message, "Could not resolve stream.");
+    }
+
+    #[test]
+    fn hpx_resolver_uses_pot_then_embedded_then_legacy_strategies() {
+        let strategies = resolver_strategy_specs();
+        assert_eq!(
+            strategies
+                .iter()
+                .map(|strategy| strategy.source)
+                .collect::<Vec<_>>(),
+            vec![
+                "pot-provider",
+                "web-embedded",
+                "legacy-android-vr",
+                "legacy-default"
+            ]
+        );
+        assert_eq!(
+            strategies[0].extractor_args,
+            Some("youtubepot-bgutilhttp:base_url=http://127.0.0.1:4416")
+        );
+        assert_eq!(strategies[0].player_client, Some("mweb"));
+        assert_eq!(strategies[1].player_client, Some("web_embedded"));
+        assert_eq!(strategies[2].player_client, Some("android_vr"));
+        assert_eq!(strategies[3].player_client, None);
+    }
+
+    #[tokio::test]
+    async fn hpx_resolver_falls_back_in_order_and_reports_chosen_source() {
+        let _env_guard = YTDLP_ENV_LOCK.lock().unwrap();
+        let probed_ranges = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let app = Router::new()
+            .route(
+                "/pot",
+                get({
+                    let probed_ranges = probed_ranges.clone();
+                    move |headers: HeaderMap| {
+                        let probed_ranges = probed_ranges.clone();
+                        async move {
+                            let range = headers
+                                .get(header::RANGE)
+                                .and_then(|value| value.to_str().ok())
+                                .unwrap_or("")
+                                .to_string();
+                            probed_ranges.lock().unwrap().push(format!("pot:{range}"));
+                            if range != "bytes=0-0" {
+                                return StatusCode::FORBIDDEN.into_response();
+                            }
+                            Response::builder()
+                                .status(StatusCode::PARTIAL_CONTENT)
+                                .header(header::CONTENT_LENGTH, "1")
+                                .header(header::CONTENT_RANGE, "bytes 0-0/2097152")
+                                .body(Body::from("a"))
+                                .unwrap()
+                                .into_response()
+                        }
+                    }
+                }),
+            )
+            .route(
+                "/audio",
+                get({
+                    let probed_ranges = probed_ranges.clone();
+                    move |headers: HeaderMap| {
+                        let probed_ranges = probed_ranges.clone();
+                        async move {
+                            let range = headers
+                                .get(header::RANGE)
+                                .and_then(|value| value.to_str().ok())
+                                .unwrap_or("")
+                                .to_string();
+                            probed_ranges
+                                .lock()
+                                .unwrap()
+                                .push(format!("embedded:{range}"));
+                            let expected = format!("bytes=0-{}", PROXY_CHUNK - 1);
+                            if range != expected {
+                                return StatusCode::BAD_GATEWAY.into_response();
+                            }
+                            Response::builder()
+                                .status(StatusCode::PARTIAL_CONTENT)
+                                .header(header::CONTENT_LENGTH, PROXY_CHUNK.to_string())
+                                .header(
+                                    header::CONTENT_RANGE,
+                                    format!("bytes 0-{}/2097152", PROXY_CHUNK - 1),
+                                )
+                                .body(Body::from(vec![b'a'; PROXY_CHUNK as usize]))
+                                .unwrap()
+                                .into_response()
+                        }
+                    }
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let fake_ytdlp = std::env::temp_dir().join(format!(
+            "bkgrnd-strategy-ytdlp-{}-{unique}",
+            std::process::id()
+        ));
+        let invocation_log = std::env::temp_dir().join(format!(
+            "bkgrnd-strategy-ytdlp-log-{}-{unique}",
+            std::process::id()
+        ));
+        std::fs::write(
+            &fake_ytdlp,
+            format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\ncase \"$*\" in\n  *youtubepot-bgutilhttp*) printf '%s\\n' 'http://{address}/pot'; exit 0 ;;\n  *youtube:player_client=web_embedded*) printf '%s\\n' 'http://{address}/audio'; exit 0 ;;\n  *) printf '%s\\n' 'forced failure' >&2; exit 1 ;;\nesac\n",
+                invocation_log.display(),
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&fake_ytdlp, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let previous_ytdlp = std::env::var_os("WOPR_YTDLP_BIN");
+        let previous_plugin_dir = std::env::var_os("WOPR_YTDLP_PLUGIN_DIR");
+        std::env::set_var("WOPR_YTDLP_BIN", &fake_ytdlp);
+        std::env::remove_var("WOPR_YTDLP_PLUGIN_DIR");
+        let state = test_state(reqwest::Client::new());
+        let resolved = resolve_direct_url(
+            &state,
+            "https://www.youtube.com/watch?v=strategy-fallback-test",
+        )
+        .await
+        .unwrap();
+
+        match previous_ytdlp {
+            Some(value) => std::env::set_var("WOPR_YTDLP_BIN", value),
+            None => std::env::remove_var("WOPR_YTDLP_BIN"),
+        }
+        match previous_plugin_dir {
+            Some(value) => std::env::set_var("WOPR_YTDLP_PLUGIN_DIR", value),
+            None => std::env::remove_var("WOPR_YTDLP_PLUGIN_DIR"),
+        }
+        std::fs::remove_file(&fake_ytdlp).unwrap();
+        let invocations = std::fs::read_to_string(&invocation_log).unwrap();
+        std::fs::remove_file(&invocation_log).unwrap();
+
+        assert_eq!(resolved.url, format!("http://{address}/audio"));
+        assert_eq!(resolved.source, "web-embedded");
+        let calls = invocations.lines().collect::<Vec<_>>();
+        assert_eq!(calls.len(), 2);
+        assert!(calls[0].contains(POT_PROVIDER_ARGS));
+        assert!(calls[0].contains("youtube:player_client=mweb"));
+        assert!(calls[0].contains("--plugin-dirs /opt/yt-dlp-plugins"));
+        assert!(!calls[0].contains("bgutil-ytdlp-pot-provider.zip"));
+        assert!(calls[1].contains("youtube:player_client=web_embedded"));
+        let full_probe = format!("bytes=0-{}", PROXY_CHUNK - 1);
+        assert_eq!(
+            probed_ranges.lock().unwrap().as_slice(),
+            &[
+                format!("pot:{full_probe}"),
+                format!("embedded:{full_probe}")
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn progressive_candidate_probe_requires_exact_206_range_and_body() {
+        let probe_end = PROXY_CHUNK - 1;
+        let app = Router::new()
+            .route(
+                "/ok",
+                get(move || async move {
+                    Response::builder()
+                        .status(StatusCode::PARTIAL_CONTENT)
+                        .header(header::CONTENT_LENGTH, PROXY_CHUNK.to_string())
+                        .header(
+                            header::CONTENT_RANGE,
+                            format!("bytes 0-{probe_end}/2097152"),
+                        )
+                        .body(Body::from(vec![0_u8; PROXY_CHUNK as usize]))
+                        .unwrap()
+                }),
+            )
+            .route(
+                "/ignored-range",
+                get(|| async {
+                    Response::builder()
+                        .status(StatusCode::OK)
+                        .body(Body::from(vec![0_u8; PROXY_CHUNK as usize]))
+                        .unwrap()
+                }),
+            )
+            .route(
+                "/wrong-range",
+                get(move || async move {
+                    Response::builder()
+                        .status(StatusCode::PARTIAL_CONTENT)
+                        .header(
+                            header::CONTENT_RANGE,
+                            format!("bytes 0-{}/2097152", probe_end - 1),
+                        )
+                        .body(Body::from(vec![0_u8; (PROXY_CHUNK - 1) as usize]))
+                        .unwrap()
+                }),
+            )
+            .route(
+                "/short-body",
+                get(move || async move {
+                    Response::builder()
+                        .status(StatusCode::PARTIAL_CONTENT)
+                        .header(
+                            header::CONTENT_RANGE,
+                            format!("bytes 0-{probe_end}/2097152"),
+                        )
+                        .body(Body::from(vec![0_u8; (PROXY_CHUNK - 1) as usize]))
+                        .unwrap()
+                }),
+            )
+            .route(
+                "/small-file",
+                get(|| async {
+                    Response::builder()
+                        .status(StatusCode::PARTIAL_CONTENT)
+                        .header(header::CONTENT_RANGE, "bytes 0-10/11")
+                        .body(Body::from("small-audio"))
+                        .unwrap()
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let state = test_state(reqwest::Client::new());
+
+        assert!(probe_direct_stream_url(&state, &format!("http://{address}/ok")).await);
+        assert!(probe_direct_stream_url(&state, &format!("http://{address}/small-file")).await);
+        for path in ["ignored-range", "wrong-range", "short-body"] {
+            assert!(
+                !probe_direct_stream_url(&state, &format!("http://{address}/{path}")).await,
+                "{path} must not pass progressive candidate validation"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn hls_candidate_probe_remains_a_manifest_get_without_range() {
+        let observed_range = Arc::new(std::sync::Mutex::new(None::<String>));
+        let app = Router::new().route(
+            "/live.m3u8",
+            get({
+                let observed_range = observed_range.clone();
+                move |headers: HeaderMap| {
+                    let observed_range = observed_range.clone();
+                    async move {
+                        *observed_range.lock().unwrap() = headers
+                            .get(header::RANGE)
+                            .and_then(|value| value.to_str().ok())
+                            .map(str::to_string);
+                        (StatusCode::OK, "#EXTM3U\n")
+                    }
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let state = test_state(reqwest::Client::new());
+
+        assert!(probe_direct_stream_url(&state, &format!("http://{address}/live.m3u8")).await);
+        assert!(observed_range.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn production_container_pins_and_starts_loopback_pot_provider() {
+        let dockerfile = include_str!("../../Dockerfile");
+        let entrypoint = include_str!("../container-entrypoint.sh");
+        assert!(dockerfile.contains("fbe4ed47f3b63cf061f1158f18f74bcc90e54033"));
+        assert!(
+            dockerfile.contains("cbc8c2e54126ec38f4c2a278b3cab685d337cadc3e7f09762116e3b28be18b5f")
+        );
+        assert!(dockerfile.contains("bgutil-ytdlp-pot-provider.zip"));
+        assert!(dockerfile
+            .contains("zip -qr /opt/yt-dlp-plugins/bgutil-ytdlp-pot-provider.zip yt_dlp_plugins"));
+        assert!(dockerfile.contains("ENV WOPR_YTDLP_PLUGIN_DIR=/opt/yt-dlp-plugins\n"));
+        assert!(!dockerfile.contains(
+            "ENV WOPR_YTDLP_PLUGIN_DIR=/opt/yt-dlp-plugins/bgutil-ytdlp-pot-provider.zip"
+        ));
+        assert!(POT_PROVIDER_ARGS.starts_with("youtubepot-bgutilhttp:"));
+        assert!(entrypoint.contains("127.0.0.1"));
+        assert!(entrypoint.contains("4416"));
+        assert!(entrypoint.contains("/ping"));
+        assert!(entrypoint.contains("exec bkgrnd_server"));
+        assert!(dockerfile.contains("ARG TARGETARCH"));
+        assert!(dockerfile.contains("deno-x86_64-unknown-linux-gnu.zip"));
+        assert!(dockerfile.contains("deno-aarch64-unknown-linux-gnu.zip"));
+        assert!(
+            dockerfile.contains("710c54d63477d1100844ef4818f19507ce0dbf40510903b1d883f19e394446a2")
+        );
+        assert!(
+            dockerfile.contains("0a60d079fa79635a59803074dbbfe86ccc35746dc2c4f8d73f2e50338b3283a9")
+        );
+        assert!(dockerfile.contains("--require-hashes"));
+        assert!(
+            dockerfile.contains("1d57897e94c6665a0a6f9bc54b34e584284e32c034ffab3a7df25d8f7b24eedf")
+        );
+        assert!(
+            dockerfile.contains("79300e5fca7f937a1eeede11f0456862c1b41107ce1d726871e0207424f4bdb4")
+        );
+        assert!(entrypoint.contains("exec env -i"));
+        assert!(entrypoint.contains("--allow-env=TOKEN_TTL,HTTPS_PROXY,HTTP_PROXY,ALL_PROXY,HOME,USERPROFILE,XDG_CACHE_HOME,DENO_DIR,PATH"));
+        assert!(!entrypoint.contains("--allow-env \\"));
+    }
+
+    #[test]
+    fn stream_source_accepts_only_https_youtube_urls() {
+        assert!(is_allowed_youtube_source_url(
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+        ));
+        assert!(is_allowed_youtube_source_url(
+            "https://youtu.be/dQw4w9WgXcQ"
+        ));
+        assert!(!is_allowed_youtube_source_url(
+            "http://www.youtube.com/watch?v=dQw4w9WgXcQ"
+        ));
+        assert!(!is_allowed_youtube_source_url(
+            "https://youtube.com.evil.test/x"
+        ));
+        assert!(!is_allowed_youtube_source_url("http://127.0.0.1:4416/ping"));
+    }
+
+    #[test]
+    fn media_candidates_reject_ssrf_and_allow_googlevideo_https() {
+        assert!(is_allowed_media_url(
+            "https://rr1---sn-a5mekn6z.googlevideo.com/videoplayback?id=abc"
+        ));
+        assert!(is_allowed_media_url(
+            "https://manifest.googlevideo.com/api/manifest/hls_playlist/id/abc"
+        ));
+        assert!(!is_allowed_media_url("http://127.0.0.1:4416/ping"));
+        assert!(!is_allowed_media_url("https://127.0.0.1/private"));
+        assert!(!is_allowed_media_url("https://googlevideo.com.evil.test/x"));
+        assert!(!is_allowed_media_url("file:///etc/passwd"));
+    }
+
+    #[test]
+    fn piped_api_base_rejects_local_or_non_https_origins() {
+        for base in [
+            "http://piped.example",
+            "https://127.0.0.1:8080",
+            "https://10.0.0.1",
+            "https://169.254.169.254",
+            "https://[::1]",
+            "https://[fc00::1]",
+            "https://[fe80::1]",
+            "https://localhost",
+        ] {
+            assert!(allowed_piped_api_base(base).is_none());
+        }
+        assert!(allowed_piped_api_base("https://piped.example/api").is_some());
+    }
+
+    #[test]
+    fn progressive_range_parser_rejects_reversed_and_overflowing_ranges() {
+        assert!(parse_progressive_range(Some("bytes=100-50")).is_err());
+        assert!(parse_progressive_range(Some("bytes=18446744073709551615-")).is_err());
+        assert!(parse_progressive_range(Some("bytes=0-18446744073709551615")).is_err());
+    }
+
+    #[tokio::test]
+    async fn progressive_rejects_upstream_that_ignores_bounded_range() {
+        let app = Router::new().route(
+            "/audio",
+            get(|| async {
+                Response::builder()
+                    .status(StatusCode::OK)
+                    .header(header::CONTENT_LENGTH, "10485760")
+                    .body(Body::from("must-not-stream"))
+                    .unwrap()
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let state = test_state(reqwest::Client::new());
+        let source_url = "https://www.youtube.com/watch?v=ignored-range-test";
+        state.stream_cache.lock().await.insert(
+            source_url.to_string(),
+            CachedStreamUrl {
+                url: format!("http://{address}/audio"),
+                expires_at: Instant::now() + Duration::from_secs(60),
+            },
+        );
+        let mut headers = HeaderMap::new();
+        headers.insert(header::RANGE, HeaderValue::from_static("bytes=0-"));
+        let response = stream_audio(
+            State(state),
+            headers,
+            Query(StreamQuery {
+                url: source_url.to_string(),
+                token: None,
+                proxy: Some(true),
+                castsig: None,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+    }
+
+    #[tokio::test]
+    async fn progressive_rejects_invalid_content_range() {
+        let app = Router::new().route(
+            "/audio",
+            get(|| async {
+                Response::builder()
+                    .status(StatusCode::PARTIAL_CONTENT)
+                    .header(header::CONTENT_LENGTH, "1")
+                    .header(header::CONTENT_RANGE, "bytes 99-99/100")
+                    .body(Body::from("x"))
+                    .unwrap()
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let state = test_state(reqwest::Client::new());
+        let source_url = "https://www.youtube.com/watch?v=invalid-content-range";
+        state.stream_cache.lock().await.insert(
+            source_url.to_string(),
+            CachedStreamUrl {
+                url: format!("http://{address}/audio"),
+                expires_at: Instant::now() + Duration::from_secs(60),
+            },
+        );
+        let mut headers = HeaderMap::new();
+        headers.insert(header::RANGE, HeaderValue::from_static("bytes=0-"));
+        let response = stream_audio(
+            State(state),
+            headers,
+            Query(StreamQuery {
+                url: source_url.to_string(),
+                token: None,
+                proxy: Some(true),
+                castsig: None,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+    }
+
+    #[tokio::test]
+    async fn progressive_rejects_explicit_range_beyond_upstream_total() {
+        let first_end = PROXY_CHUNK - 1;
+        let upstream_total = PROXY_CHUNK + 10;
+        let app = Router::new().route(
+            "/audio",
+            get(move || async move {
+                Response::builder()
+                    .status(StatusCode::PARTIAL_CONTENT)
+                    .header(header::CONTENT_LENGTH, PROXY_CHUNK.to_string())
+                    .header(
+                        header::CONTENT_RANGE,
+                        format!("bytes 0-{first_end}/{upstream_total}"),
+                    )
+                    .body(Body::from(vec![0_u8; PROXY_CHUNK as usize]))
+                    .unwrap()
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let state = test_state(reqwest::Client::new());
+        let source_url = "https://www.youtube.com/watch?v=range-past-eof";
+        state.stream_cache.lock().await.insert(
+            source_url.to_string(),
+            CachedStreamUrl {
+                url: format!("http://{address}/audio"),
+                expires_at: Instant::now() + Duration::from_secs(60),
+            },
+        );
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::RANGE,
+            HeaderValue::from_str(&format!("bytes=0-{upstream_total}")).unwrap(),
+        );
+        let response = stream_audio(
+            State(state),
+            headers,
+            Query(StreamQuery {
+                url: source_url.to_string(),
+                token: None,
+                proxy: Some(true),
+                castsig: None,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::RANGE_NOT_SATISFIABLE);
+    }
+
+    #[tokio::test]
+    async fn progressive_open_range_caps_body_to_content_range_span() {
+        let app = Router::new().route(
+            "/audio",
+            get(|| async {
+                Response::builder()
+                    .status(StatusCode::PARTIAL_CONTENT)
+                    .header(header::CONTENT_LENGTH, "100")
+                    .header(header::CONTENT_RANGE, "bytes 0-3/1000")
+                    .body(Body::from(vec![b'x'; 100]))
+                    .unwrap()
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let state = test_state(reqwest::Client::new());
+        let source_url = "https://www.youtube.com/watch?v=oversized-range-body";
+        state.stream_cache.lock().await.insert(
+            source_url.to_string(),
+            CachedStreamUrl {
+                url: format!("http://{address}/audio"),
+                expires_at: Instant::now() + Duration::from_secs(60),
+            },
+        );
+        let mut headers = HeaderMap::new();
+        headers.insert(header::RANGE, HeaderValue::from_static("bytes=0-"));
+        let response = stream_audio(
+            State(state),
+            headers,
+            Query(StreamQuery {
+                url: source_url.to_string(),
+                token: None,
+                proxy: Some(true),
+                castsig: None,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
+        assert_eq!(response.headers().get(header::CONTENT_LENGTH).unwrap(), "4");
+        let body = to_bytes(response.into_body(), 5).await.unwrap();
+        assert_eq!(body.as_ref(), b"xxxx");
+    }
+
+    #[tokio::test]
+    async fn media_http_client_does_not_follow_redirects() {
+        let final_hits = Arc::new(AtomicUsize::new(0));
+        let app = Router::new()
+            .route("/redirect", get(|| async { Redirect::temporary("/final") }))
+            .route(
+                "/final",
+                get({
+                    let final_hits = final_hits.clone();
+                    move || {
+                        let final_hits = final_hits.clone();
+                        async move {
+                            final_hits.fetch_add(1, Ordering::SeqCst);
+                            StatusCode::OK
+                        }
+                    }
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let response = build_http_client()
+            .unwrap()
+            .get(format!("http://{address}/redirect"))
+            .send()
+            .await
+            .unwrap();
+        assert!(response.status().is_redirection());
+        assert_eq!(final_hits.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn timed_out_ytdlp_process_is_terminated() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let pid_file = std::env::temp_dir().join(format!(
+            "bkgrnd-ytdlp-timeout-pid-{}-{unique}",
+            std::process::id()
+        ));
+        let mut command = tokio::process::Command::new("/bin/sh");
+        command.args([
+            "-c",
+            &format!("echo $$ > '{}'; exec sleep 30", pid_file.display()),
+        ]);
+        let result = run_ytdlp_command(command, Duration::from_millis(100)).await;
+        assert!(matches!(result, Err(YtdlpCommandError::Timeout)));
+        let pid = std::fs::read_to_string(&pid_file).unwrap();
+        let mut still_running = true;
+        for _ in 0..20 {
+            still_running = std::process::Command::new("kill")
+                .args(["-0", pid.trim()])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .map(|status| status.success())
+                .unwrap_or(false);
+            if !still_running {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        std::fs::remove_file(pid_file).unwrap();
+        assert!(!still_running, "timed-out yt-dlp child was left running");
     }
 
     #[test]

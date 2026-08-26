@@ -1,0 +1,12 @@
+{
+  "gate": "QA",
+  "timestamp": "2026-08-26T17:14:39Z",
+  "task_id": "triage-2026-08-26-remote-stream-range-failure",
+  "task_title": "Triage: 2 issues (remote progressive streams fail on HPX)",
+  "agent_model": "hosaka-gate.sh",
+  "summary": "Validated QA pass before promoting to dev-complete",
+  "transition": "code-complete->dev-complete",
+  "decisions": [],
+  "skipped_checks": ["hosaka-verify.sh QA (Helga PASS)"],
+  "source_artifacts": ["code-complete/triage-2026-08-26-remote-stream-range-failure/task.yaml"]
+}
