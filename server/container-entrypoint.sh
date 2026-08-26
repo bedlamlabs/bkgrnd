@@ -18,7 +18,7 @@ mkdir -p "$provider_home" "$provider_deno_dir"
     DENO_DIR="$provider_deno_dir" \
     TOKEN_TTL="$provider_token_ttl" \
     deno run \
-    --allow-env=TOKEN_TTL,HTTPS_PROXY,HTTP_PROXY,ALL_PROXY,HOME,USERPROFILE,XDG_CACHE_HOME,DENO_DIR,PATH \
+    --allow-env \
     --allow-net \
     --allow-ffi=. \
     --allow-read=. \

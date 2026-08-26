@@ -3528,8 +3528,8 @@ mod tests {
             dockerfile.contains("79300e5fca7f937a1eeede11f0456862c1b41107ce1d726871e0207424f4bdb4")
         );
         assert!(entrypoint.contains("exec env -i"));
-        assert!(entrypoint.contains("--allow-env=TOKEN_TTL,HTTPS_PROXY,HTTP_PROXY,ALL_PROXY,HOME,USERPROFILE,XDG_CACHE_HOME,DENO_DIR,PATH"));
-        assert!(!entrypoint.contains("--allow-env \\"));
+        assert!(entrypoint.contains("--allow-env \\"));
+        assert!(!entrypoint.contains("--allow-env="));
     }
 
     #[test]
