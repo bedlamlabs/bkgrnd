@@ -2,7 +2,7 @@
   "version": "1.0",
   "task_dir": "triage-2026-08-26-remote-stream-range-failure",
   "task_title": "Triage: HPX resolver runtime survivability",
-  "timestamp": "2026-08-26T20:33:03Z",
+  "timestamp": "2026-08-26T22:02:03Z",
   "attempt": 1,
   "verdict": "PASS",
   "generated_by": "hosaka-verify.sh",

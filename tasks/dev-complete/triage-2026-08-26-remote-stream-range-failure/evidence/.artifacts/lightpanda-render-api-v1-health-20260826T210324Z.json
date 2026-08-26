@@ -1,0 +1,13 @@
+{
+  "url": "http://localhost:5001/api/v1/health",
+  "final_url": "http://localhost:5001/api/v1/health",
+  "status": 404,
+  "title": "",
+  "pathname": "/api/v1/health",
+  "body_text": "{\"error\":\"API endpoint not found\",\"path\":\"/api/v1/health\",\"method\":\"GET\"}",
+  "root_html_length": 0,
+  "feature_probe": null,
+  "page_errors": [],
+  "verdict": "FAIL",
+  "generated_by": "lightpanda-verify.mjs"
+}

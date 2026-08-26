@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "finding_fingerprint": "62341e3fc835ad8b2a34b898859eb8422e51425aac7f1ef3a887ea346f80c04b",
+  "original_agent": "deepseek-technical",
+  "validation_agent": "validation-agent-62341e3fc835ad8b2a34b898859eb8422e51425aac7f1ef3a887ea346f80c04b",
+  "provider": "codex",
+  "verdict": "FALSE",
+  "confidence": 98,
+  "score": 2,
+  "notes": "Permissions are set in Dockerfile, not runtime main.rs; root ownership, no group/world write bits, non-root USER, and explicit tests prevent modification. The paths contain required provider/plugin code, not identified secrets.",
+  "timestamp": "2026-08-26T21:10:01.208Z",
+  "generated_by": "hosaka-review-runner.mjs",
+  "runner_hash": "e1c02b6a85b2bc7dcb52721e0782f74af00289dfcd7acc24a275da2b8b484fda"
+}

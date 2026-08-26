@@ -1,6 +1,6 @@
 {
-  "hmac": "a5b7adccd3619c400a0ec3126968d3e53e3832b8e3e8e8efe5dc0ad8f219c100",
-  "evidence_sha256": "908ffaf86b9e3bfae29f17a684e804d130323efd2b0c24bcf5d9c0cef8f65bf7",
-  "signed_at": "2026-08-26T20:32:23.480396+00:00",
+  "hmac": "7b0823c8300df9619d3e4299539b84328b144b7fd727fc5947b952e7f6809c0f",
+  "evidence_sha256": "d334af2c6ab1274d388302d3dfde6b5d74dab9b4134add283bfacffd197a9311",
+  "signed_at": "2026-08-26T22:01:59.455079+00:00",
   "daemon_version": "2.0.0"
 }

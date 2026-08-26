@@ -3586,6 +3586,18 @@ mod tests {
         assert!(dockerfile.contains("ENV XDG_CACHE_HOME=/var/cache/bkgrnd"));
         assert!(dockerfile.contains("/var/lib/bkgrnd/provider-home"));
         assert!(dockerfile.contains("/var/cache/bkgrnd/deno"));
+        assert!(dockerfile
+            .contains("find /opt/bgutil-provider /opt/yt-dlp-plugins -type d -exec chmod 0755"));
+        assert!(dockerfile
+            .contains("find /opt/bgutil-provider /opt/yt-dlp-plugins -type f -exec chmod 0644"));
+        assert!(dockerfile.contains(
+            "find /opt/bgutil-provider /opt/yt-dlp-plugins \\( -type f -o -type d \\) -perm /0022"
+        ));
+        assert!(dockerfile.contains(
+            "/opt/bgutil-provider/server/node_modules/proxy-from-env/package.json)\" = \"644:0:0\""
+        ));
+        assert!(dockerfile
+            .contains("/opt/yt-dlp-plugins/bgutil-ytdlp-pot-provider.zip)\" = \"644:0:0\""));
         assert!(entrypoint
             .contains("provider_home=${WOPR_POT_PROVIDER_HOME:-/var/lib/bkgrnd/provider-home}"));
         assert!(entrypoint

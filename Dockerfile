@@ -62,6 +62,15 @@ RUN curl -fsSL \
     && cd /opt/bgutil-provider/plugin \
     && zip -qr /opt/yt-dlp-plugins/bgutil-ytdlp-pot-provider.zip yt_dlp_plugins \
     && unzip -tq /opt/yt-dlp-plugins/bgutil-ytdlp-pot-provider.zip \
+    && chown -R root:root /opt/bgutil-provider /opt/yt-dlp-plugins \
+    && find /opt/bgutil-provider /opt/yt-dlp-plugins -type d -exec chmod 0755 {} + \
+    && find /opt/bgutil-provider /opt/yt-dlp-plugins -type f -exec chmod 0644 {} + \
+    && test -z "$(find /opt/bgutil-provider /opt/yt-dlp-plugins \( ! -user root -o ! -group root \) -print -quit)" \
+    && test -z "$(find /opt/bgutil-provider /opt/yt-dlp-plugins -type d ! -perm -0005 -print -quit)" \
+    && test -z "$(find /opt/bgutil-provider /opt/yt-dlp-plugins -type f ! -perm -0004 -print -quit)" \
+    && test -z "$(find /opt/bgutil-provider /opt/yt-dlp-plugins \( -type f -o -type d \) -perm /0022 -print -quit)" \
+    && test "$(stat -c '%a:%u:%g' /opt/bgutil-provider/server/node_modules/proxy-from-env/package.json)" = "644:0:0" \
+    && test "$(stat -c '%a:%u:%g' /opt/yt-dlp-plugins/bgutil-ytdlp-pot-provider.zip)" = "644:0:0" \
     && rm -f /tmp/bgutil-provider.tar.gz
 
 WORKDIR /app

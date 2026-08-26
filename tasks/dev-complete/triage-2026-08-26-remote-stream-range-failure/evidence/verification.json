@@ -1,6 +1,6 @@
 {
   "version": "1.0",
-  "timestamp": "2026-08-26T20:20:39Z",
+  "timestamp": "2026-08-26T21:04:07Z",
   "task_dir": "triage-2026-08-26-remote-stream-range-failure",
   "base_url": "http://localhost:5001",
   "verdict": "PASS",

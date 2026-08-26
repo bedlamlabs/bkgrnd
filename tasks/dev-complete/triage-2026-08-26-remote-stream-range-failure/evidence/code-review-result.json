@@ -1,17 +1,35 @@
 {
   "version": "1.0",
-  "timestamp": "2026-08-26T20:20:56.730Z",
+  "timestamp": "2026-08-26T21:10:01.286Z",
   "task_dir": "triage-2026-08-26-remote-stream-range-failure",
   "roster_path": "/Users/geoffmccaleb/.hosaka/standards/review-roster.yaml",
   "diff_stats": null,
   "agents_dispatched": 2,
   "agents_skipped": 3,
-  "validation_agents_dispatched": 0,
-  "total_findings_raw": 0,
-  "total_findings_validated": 0,
+  "validation_agents_dispatched": 1,
+  "total_findings_raw": 1,
+  "total_findings_validated": 1,
   "total_findings_above_threshold": 0,
   "threshold": 80,
-  "findings": [],
+  "findings": [
+    {
+      "id": 1,
+      "severity": "suggestion",
+      "priority": "P2",
+      "confidence": 80,
+      "validation_confidence": 2,
+      "final_score": 2,
+      "file": "server/src/main.rs",
+      "line": null,
+      "agent": "deepseek-technical",
+      "category": "validation_rejected",
+      "description": "The diff contains code that sets file permissions for directories and files within /opt/bgutil-provider and /opt/yt-dlp-plugins, which could introduce security vulnerabilities by allowing unauthorized access to sensitive files.",
+      "fix_assessment": "Ensure that the code does not set file permissions to 0755 or 0644 for files and directories, respectively, as this could expose sensitive information. Additionally, review the logic for setting permissions to ensure it does not inadvertently allow access to files that should be protected.",
+      "failure_mode": "",
+      "validated_by": "validation-agent-62341e3fc835ad8b2a34b898859eb8422e51425aac7f1ef3a887ea346f80c04b",
+      "validation_notes": "Permissions are set in Dockerfile, not runtime main.rs; root ownership, no group/world write bits, non-root USER, and explicit tests prevent modification. The paths contain required provider/plugin code, not identified secrets."
+    }
+  ],
   "spec_compliance": null,
   "verdict": "CLEAN",
   "generated_by": "hosaka-review.sh",
@@ -21,15 +39,15 @@
       "voice": "qwen30-reviewer",
       "provider": "qwen3-30b-a3b",
       "provider_seen": "qwen3-30b-a3b",
-      "path": "tasks/in-progress/triage-2026-08-26-remote-stream-range-failure/evidence/review/qwen30-reviewer-raw.md",
-      "ts": "2026-08-26T20:20:54.446Z"
+      "path": "tasks/dev-complete/triage-2026-08-26-remote-stream-range-failure/evidence/review/qwen30-reviewer-raw.md",
+      "ts": "2026-08-26T21:08:48.455Z"
     },
     {
       "voice": "deepseek-technical",
       "provider": "deepseek-coder",
       "provider_seen": "deepseek-coder",
-      "path": "tasks/in-progress/triage-2026-08-26-remote-stream-range-failure/evidence/review/deepseek-technical-raw.md",
-      "ts": "2026-08-26T20:20:56.665Z"
+      "path": "tasks/dev-complete/triage-2026-08-26-remote-stream-range-failure/evidence/review/deepseek-technical-raw.md",
+      "ts": "2026-08-26T21:09:22.362Z"
     }
   ],
   "skipped_voice_files": [
@@ -37,24 +55,24 @@
       "voice": "codex-reviewer",
       "provider": "codex",
       "provider_seen": "codex",
-      "path": "tasks/in-progress/triage-2026-08-26-remote-stream-range-failure/evidence/review/codex-reviewer-raw.md",
-      "ts": "2026-08-26T20:20:41.828Z",
+      "path": "tasks/dev-complete/triage-2026-08-26-remote-stream-range-failure/evidence/review/codex-reviewer-raw.md",
+      "ts": "2026-08-26T21:08:22.006Z",
       "reason": "exec_error:spawnSync /bin/sh ETIMEDOUT"
     },
     {
       "voice": "claude-opus-reviewer",
       "provider": "opus",
       "provider_seen": "opus",
-      "path": "tasks/in-progress/triage-2026-08-26-remote-stream-range-failure/evidence/review/claude-opus-reviewer-raw.md",
-      "ts": "2026-08-26T20:20:41.829Z",
+      "path": "tasks/dev-complete/triage-2026-08-26-remote-stream-range-failure/evidence/review/claude-opus-reviewer-raw.md",
+      "ts": "2026-08-26T21:08:22.007Z",
       "reason": "unavailable:review-provider-bridge: [Errno 2] No such file or directory: 'claude'"
     },
     {
       "voice": "gemini-reviewer",
       "provider": "gemini",
       "provider_seen": "gemini",
-      "path": "tasks/in-progress/triage-2026-08-26-remote-stream-range-failure/evidence/review/gemini-reviewer-raw.md",
-      "ts": "2026-08-26T20:20:41.829Z",
+      "path": "tasks/dev-complete/triage-2026-08-26-remote-stream-range-failure/evidence/review/gemini-reviewer-raw.md",
+      "ts": "2026-08-26T21:08:22.007Z",
       "reason": "exec_error:gemini-reviewer failed with exit 1: Warning: Basic terminal detected (TERM=dumb). Visual rendering will be limited. For the best experience, use a terminal emulator with truecolor support. Warning: 256-color support not detected. Using a terminal with at least 256-color support is recommended for a better visual experience. Error authenticating: IneligibleTierError: This client is no longer supported for Gemini Code Assist for individuals. To continue using Gemini, please mig"
     }
   ]

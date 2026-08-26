@@ -16,7 +16,6 @@ files_touched:
   - server/container-entrypoint.sh
   - server/src/main.rs
   - server/services/provider_health.rs
-  - server/web/app.js
   - scripts/verify-hpx-runtime-resilience.sh
 endpoints_affected:
   - method: GET
