@@ -1,0 +1,1 @@
+Dixie render-smoke vitest config not found at product/tests/render-smoke/vitest.config.ts

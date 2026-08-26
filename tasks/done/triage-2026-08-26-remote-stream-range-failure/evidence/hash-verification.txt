@@ -1,0 +1,4 @@
+# Hash Verification — triage-2026-08-26-remote-stream-range-failure
+# Timestamp: 2026-08-26T17:45:41Z
+
+OK: remote-stream-scope.sh — hash matches baseline

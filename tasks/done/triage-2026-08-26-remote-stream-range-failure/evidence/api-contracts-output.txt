@@ -1,0 +1,2 @@
+API contract validation script not found: /Users/geoffmccaleb/bkgrnd/scripts/validate-api-contracts.ts
+Skipping API contract validation.

@@ -1,8 +1,8 @@
 {
   "version": "1.0",
-  "timestamp": "2026-08-26T16:58:17Z",
+  "timestamp": "2026-08-26T17:49:52Z",
   "task_dir": "triage-2026-08-26-remote-stream-range-failure",
-  "environment": "localhost",
+  "environment": "production",
   "generated_by": "run-acceptance-tests.sh",
   "script_hash": "ddc0ca337366019f9d3f08f6a3e81128c0d69dfd9a4dc1be02f40a0b1fac2e86",
   "total_tests": 2,
@@ -14,10 +14,10 @@
       "id": "AT-1",
       "criterion": "Progressive remote streams use safe bounded ranges and preserve exact client semantics without truncation.",
       "tool": "bash",
-      "cmd": "cargo test --manifest-path server/Cargo.toml progressive_",
+      "cmd": "bash scripts/verify-hpx-remote-streaming.sh --ranges",
       "expect": "exit_0",
       "actual_exit": 0,
-      "stdout_snippet": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.33s\n     Running unittests src/main.rs (server/target/debug/deps/bkgrnd_server-432a5a2a70a8c44f)\n\nrunning 11 tests\ntest tests::prog",
+      "stdout_snippet": "PASS: HPX served open-ended and contiguous remote ranges for the real saved streams; live HLS remained playable",
       "pass": true,
       "status": "PASS",
       "tools_tried": 1,
@@ -26,16 +26,16 @@
       "exercised_routes": [],
       "artifact": "",
       "target": "",
-      "duration_ms": 1000
+      "duration_ms": 9000
     },
     {
       "id": "AT-2",
       "criterion": "HPX uses the pinned POT provider then embedded and legacy fallbacks, accepting only fully probed media URLs.",
       "tool": "bash",
-      "cmd": "cargo test --manifest-path server/Cargo.toml hpx_resolver_",
+      "cmd": "bash scripts/verify-hpx-remote-streaming.sh --resolver",
       "expect": "exit_0",
       "actual_exit": 0,
-      "stdout_snippet": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s\n     Running unittests src/main.rs (server/target/debug/deps/bkgrnd_server-432a5a2a70a8c44f)\n\nrunning 2 tests\ntest tests::hpx_r",
+      "stdout_snippet": "PASS: HPX resolved a freshly probed real stream via validated pot-provider fallback chain",
       "pass": true,
       "status": "PASS",
       "tools_tried": 1,
@@ -44,7 +44,7 @@
       "exercised_routes": [],
       "artifact": "",
       "target": "",
-      "duration_ms": 0
+      "duration_ms": 8000
     }
   ]
 }

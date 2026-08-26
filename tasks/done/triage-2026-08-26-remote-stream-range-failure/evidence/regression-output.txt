@@ -1,0 +1,51 @@
+Regression scoped to task acceptance_tests; broad repo sweep is not a valid fallback signal for this task package.
+{
+  "version": "1.0",
+  "timestamp": "2026-08-26T17:45:42Z",
+  "task_dir": "triage-2026-08-26-remote-stream-range-failure",
+  "environment": "localhost",
+  "generated_by": "run-acceptance-tests.sh",
+  "script_hash": "ddc0ca337366019f9d3f08f6a3e81128c0d69dfd9a4dc1be02f40a0b1fac2e86",
+  "total_tests": 2,
+  "passed": 2,
+  "failed": 0,
+  "exercised_routes": [],
+  "results": [
+    {
+      "id": "AT-1",
+      "criterion": "Progressive remote streams use safe bounded ranges and preserve exact client semantics without truncation.",
+      "tool": "bash",
+      "cmd": "cargo test --manifest-path server/Cargo.toml progressive_",
+      "expect": "exit_0",
+      "actual_exit": 0,
+      "stdout_snippet": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.22s\n     Running unittests src/main.rs (server/target/debug/deps/bkgrnd_server-432a5a2a70a8c44f)\n\nrunning 11 tests\ntest tests::prog",
+      "pass": true,
+      "status": "PASS",
+      "tools_tried": 1,
+      "capability_claim": "",
+      "fallback_used": false,
+      "exercised_routes": [],
+      "artifact": "",
+      "target": "",
+      "duration_ms": 0
+    },
+    {
+      "id": "AT-2",
+      "criterion": "HPX uses the pinned POT provider then embedded and legacy fallbacks, accepting only fully probed media URLs.",
+      "tool": "bash",
+      "cmd": "cargo test --manifest-path server/Cargo.toml hpx_resolver_",
+      "expect": "exit_0",
+      "actual_exit": 0,
+      "stdout_snippet": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s\n     Running unittests src/main.rs (server/target/debug/deps/bkgrnd_server-432a5a2a70a8c44f)\n\nrunning 2 tests\ntest tests::hpx_r",
+      "pass": true,
+      "status": "PASS",
+      "tools_tried": 1,
+      "capability_claim": "",
+      "fallback_used": false,
+      "exercised_routes": [],
+      "artifact": "",
+      "target": "",
+      "duration_ms": 0
+    }
+  ]
+}

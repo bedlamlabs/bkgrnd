@@ -1,0 +1,12 @@
+{
+  "gate": "DEPLOY",
+  "timestamp": "2026-08-26T17:49:52Z",
+  "task_id": "triage-2026-08-26-remote-stream-range-failure",
+  "task_title": "Triage: 2 issues (remote progressive streams fail on HPX)",
+  "agent_model": "hosaka-gate.sh",
+  "summary": "Validated deployment complete, CI passed, production verified, and ship summary valid",
+  "transition": "dev-complete->done",
+  "decisions": [],
+  "skipped_checks": [],
+  "source_artifacts": ["dev-complete/triage-2026-08-26-remote-stream-range-failure/task.yaml"]
+}

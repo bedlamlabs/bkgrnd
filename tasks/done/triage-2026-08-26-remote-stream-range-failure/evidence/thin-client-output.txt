@@ -1,0 +1,2 @@
+Thin client audit script not found: /Users/geoffmccaleb/bkgrnd/scripts/audit-client-business-logic.ts
+Skipping thin client audit.

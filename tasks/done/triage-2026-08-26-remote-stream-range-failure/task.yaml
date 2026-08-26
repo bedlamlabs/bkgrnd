@@ -1,12 +1,15 @@
 id: "triage-2026-08-26-remote-stream-range-failure"
 title: "Triage: 2 issues (remote progressive streams fail on HPX)"
-status: dev-complete
+status: done
 workflow_mode: turbo
 triage: true
 complexity: 2
 issue_count: 2
 non_web_task: true
 domains: [api, deployment]
+
+production_verification_spec:
+  base_url: "https://bkgrnd.bedl.am"
 
 acceptance_tests:
   - id: AT-1
@@ -35,3 +38,6 @@ acceptance_tests:
           tool: bash
           cmd: "bash scripts/verify-hpx-remote-streaming.sh --resolver"
           expect: exit_0
+
+baseline_hashes:
+  "remote-stream-scope.sh": "92f81805c809674f8bb0e4afcdbde32f9e588a58f05f7e094bcb96d49c423362"

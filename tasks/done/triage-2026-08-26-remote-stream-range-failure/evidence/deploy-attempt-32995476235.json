@@ -1,0 +1,38 @@
+{
+  "version": "1.0",
+  "timestamp": "2026-08-26T17:47:59Z",
+  "task_id": "triage-2026-08-26-remote-stream-range-failure",
+  "generated_by": "github-orchestrator",
+  "evidence_source": "github_actions_api",
+  "verdict": "PASS",
+  "status": "completed",
+  "conclusion": "success",
+  "repository": "bedlamlabs/bkgrnd",
+  "branch": "main",
+  "implementation_commit": "56cc089332c72cae0e4d6e1ff5a43dded3fda878",
+  "task_deployment_path": {
+    "repository": "bedlamlabs/bkgrnd",
+    "branch": "main",
+    "implementation_commit": "56cc089332c72cae0e4d6e1ff5a43dded3fda878",
+    "production_target": "HPX",
+    "deploy_run": {
+      "provider": "github_actions",
+      "workflow": "Rust tests (macOS)",
+      "run_id": 32995476235,
+      "url": "https://github.com/bedlamlabs/bkgrnd/actions/runs/32995476235",
+      "status": "completed",
+      "conclusion": "success",
+      "head_sha": "56cc089332c72cae0e4d6e1ff5a43dded3fda878",
+      "created_at": "2026-08-26T17:39:38Z",
+      "completed_at": "2026-08-26T17:41:29Z"
+    }
+  },
+  "current_repo_state": {
+    "task_merge_sha": "56cc089332c72cae0e4d6e1ff5a43dded3fda878",
+    "remote_branch": "main"
+  },
+  "evidence": {
+    "monitor_result": "tasks/dev-complete/triage-2026-08-26-remote-stream-range-failure/evidence/monitor-result.json",
+    "github_run": "https://github.com/bedlamlabs/bkgrnd/actions/runs/32995476235"
+  }
+}
