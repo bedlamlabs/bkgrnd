@@ -1,7 +1,7 @@
 id: "fix-2026-08-27-macos-focus-theft"
 title: "Prevent macOS menu-bar focus theft"
 priority: P0
-status: dev-complete
+status: done
 project: bkgrnd
 created_at: "2026-08-27"
 updated_at: "2026-08-28"

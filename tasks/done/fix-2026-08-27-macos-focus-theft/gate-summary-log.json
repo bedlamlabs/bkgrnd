@@ -5,6 +5,11 @@
     "task_id": "fix-2026-08-27-macos-focus-theft"
   },
   {
+    "gate": "DEPLOY",
+    "timestamp": "2026-08-28T00:41:45Z",
+    "task_id": "fix-2026-08-27-macos-focus-theft"
+  },
+  {
     "gate": "QA",
     "timestamp": "2026-08-28T00:32:08Z",
     "task_id": "fix-2026-08-27-macos-focus-theft"

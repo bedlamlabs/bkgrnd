@@ -1,0 +1,35 @@
+{
+  "version": "1.0",
+  "timestamp": "2026-08-28T00:41:08Z",
+  "task_dir": "fix-2026-08-27-macos-focus-theft",
+  "production_url": "installed-macos-app",
+  "verdict": "PASS",
+  "total_checks": 3,
+  "passed": 3,
+  "failed": 0,
+  "generated_by": "verify-production.sh",
+  "script_hash": "220ee2c8d2a6432684272edd782d199c8fbc0359594aadaaf2d94ae4cc2d87f7",
+  "checks": [
+    {
+      "type": "health",
+      "target": "https://bkgrnd.bedl.am/api/v1/health",
+      "method": "curl",
+      "status": "PASS",
+      "detail": "HTTP 200"
+    },
+    {
+      "type": "acceptance_test",
+      "target": "installed-macos-app:acceptance:AT-1",
+      "method": "bash",
+      "status": "PASS",
+      "detail": "PASS: export TASK_DIR=${HOSAKA_TASK_DIR:-/Users/geoffmccaleb/bkgrnd/tasks/dev-complete/fix-2026-08-27-macos-focus-theft}; bash \"$TASK_DIR/tests/macos-focus-retention.test.sh\" --installed"
+    },
+    {
+      "type": "acceptance_test",
+      "target": "installed-macos-app:acceptance:AT-2",
+      "method": "bash",
+      "status": "PASS",
+      "detail": "PASS: export TASK_DIR=${HOSAKA_TASK_DIR:-/Users/geoffmccaleb/bkgrnd/tasks/dev-complete/fix-2026-08-27-macos-focus-theft}; bash \"$TASK_DIR/tests/macos-focus-retention.test.sh\" --installed"
+    }
+  ]
+}

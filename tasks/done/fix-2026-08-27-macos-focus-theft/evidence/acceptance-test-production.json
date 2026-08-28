@@ -1,0 +1,50 @@
+{
+  "version": "1.0",
+  "timestamp": "2026-08-28T00:41:45Z",
+  "task_dir": "fix-2026-08-27-macos-focus-theft",
+  "environment": "production",
+  "generated_by": "run-acceptance-tests.sh",
+  "script_hash": "ddc0ca337366019f9d3f08f6a3e81128c0d69dfd9a4dc1be02f40a0b1fac2e86",
+  "total_tests": 2,
+  "passed": 2,
+  "failed": 0,
+  "exercised_routes": [],
+  "results": [
+    {
+      "id": "AT-1",
+      "criterion": "Opening bkgrnd from its menu-bar icon does not replace the user's frontmost application.",
+      "tool": "bash",
+      "cmd": "export TASK_DIR=${HOSAKA_TASK_DIR:-/Users/geoffmccaleb/bkgrnd/tasks/dev-complete/fix-2026-08-27-macos-focus-theft}; bash \"$TASK_DIR/tests/macos-focus-retention.test.sh\" --installed",
+      "expect": "contains \"AT-1 PASS\"",
+      "actual_exit": 0,
+      "stdout_snippet": "AT-1 PASS: installed tray interaction retained frontmost application (Safari -> Safari)\nAT-2 PASS: installed UIElement panel toggled without terminating the app",
+      "pass": true,
+      "status": "PASS",
+      "tools_tried": 1,
+      "capability_claim": "",
+      "fallback_used": false,
+      "exercised_routes": [],
+      "artifact": "",
+      "target": "",
+      "duration_ms": 3000
+    },
+    {
+      "id": "AT-2",
+      "criterion": "The menu-bar panel still opens and dismisses normally after the focus fix.",
+      "tool": "bash",
+      "cmd": "export TASK_DIR=${HOSAKA_TASK_DIR:-/Users/geoffmccaleb/bkgrnd/tasks/dev-complete/fix-2026-08-27-macos-focus-theft}; bash \"$TASK_DIR/tests/macos-focus-retention.test.sh\" --installed",
+      "expect": "contains \"AT-2 PASS\"",
+      "actual_exit": 0,
+      "stdout_snippet": "AT-1 PASS: installed tray interaction retained frontmost application (Safari -> Safari)\nAT-2 PASS: installed UIElement panel toggled without terminating the app",
+      "pass": true,
+      "status": "PASS",
+      "tools_tried": 1,
+      "capability_claim": "",
+      "fallback_used": false,
+      "exercised_routes": [],
+      "artifact": "",
+      "target": "",
+      "duration_ms": 3000
+    }
+  ]
+}
