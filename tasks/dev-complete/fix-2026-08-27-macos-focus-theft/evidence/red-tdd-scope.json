@@ -1,0 +1,19 @@
+{
+  "covered_cases": [
+    "AT-1",
+    "AT-2"
+  ],
+  "invalid_commands": [],
+  "missing_cases": [],
+  "required_cases": [
+    {
+      "id": "AT-1",
+      "type": "acceptance"
+    },
+    {
+      "id": "AT-2",
+      "type": "acceptance"
+    }
+  ],
+  "verdict": "PASS"
+}

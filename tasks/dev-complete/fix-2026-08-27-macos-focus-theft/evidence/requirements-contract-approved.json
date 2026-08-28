@@ -1,0 +1,12 @@
+{
+  "version": "1.0",
+  "timestamp": "2026-08-28T00:25:53Z",
+  "task_dir": "fix-2026-08-27-macos-focus-theft",
+  "contract_file": "requirements-contract.md",
+  "contract_sha256": "8a525a62df37e57326b2745a3f1c51ec19b245525ea72b7bd5667dc96e79f5c6",
+  "feature_count": 2,
+  "approved": true,
+  "approved_by": "geoffrey",
+  "generated_by": "contract-approve.sh",
+  "script_hash": "1fc1a33299eedfbcc3a9a0c33ef79546d4f5fdfa1e52561bd1add575d815d733"
+}

@@ -1,0 +1,96 @@
+{
+  "version": "1.0",
+  "timestamp": "2026-08-28T00:29:53.598Z",
+  "task_dir": "fix-2026-08-27-macos-focus-theft",
+  "roster_path": "/Users/geoffmccaleb/.hosaka/standards/review-roster.yaml",
+  "diff_stats": null,
+  "agents_dispatched": 2,
+  "agents_skipped": 3,
+  "validation_agents_dispatched": 2,
+  "total_findings_raw": 2,
+  "total_findings_validated": 2,
+  "total_findings_above_threshold": 0,
+  "threshold": 80,
+  "findings": [
+    {
+      "id": 1,
+      "severity": "suggestion",
+      "priority": "P2",
+      "confidence": 80,
+      "validation_confidence": 0,
+      "final_score": 0,
+      "file": "src-tauri/src/lib.rs",
+      "line": null,
+      "agent": "qwen30-reviewer",
+      "category": "validation_rejected",
+      "description": "The code to set focus on the window has been removed without a clear replacement or explanation.",
+      "fix_assessment": "Reinstate the `let _ = window.set_focus();` line to ensure the window's focus state remains consistent with the original functionality.",
+      "failure_mode": "",
+      "validated_by": "validation-agent-b1c214e94026779ab16dd5cf30f2c1dbd3761b1ea4d1bf6e9274536992d798f3",
+      "validation_notes": "Removal is the explicit P0 fix: task red evidence identifies `set_focus()` as invoking macOS `activateIgnoringOtherApps:YES`; AT-1 verifies focus retention and AT-2 covers opening/dismissal behavior."
+    },
+    {
+      "id": 2,
+      "severity": "suggestion",
+      "priority": "P2",
+      "confidence": 80,
+      "validation_confidence": 0,
+      "final_score": 0,
+      "file": "src-tauri/src/lib.rs",
+      "line": null,
+      "agent": "deepseek-technical",
+      "category": "validation_rejected",
+      "description": "The `set_focus` method is removed without a replacement, which may lead to a loss of functionality where the window loses focus after being toggled.",
+      "fix_assessment": "Reintroduce the `set_focus` method call to ensure the window maintains focus as intended after being toggled.",
+      "failure_mode": "",
+      "validated_by": "validation-agent-f43233673039a8fafe1cccf619a3fe04d61432241e75e8162272b51b621206fc",
+      "validation_notes": "Removal is the intended P0 fix: task evidence states `set_focus` triggers macOS `activateIgnoringOtherApps:YES`; reintroducing it would violate AT-1, while normal show/hide behavior is explicitly covered by AT-2."
+    }
+  ],
+  "spec_compliance": null,
+  "verdict": "CLEAN",
+  "generated_by": "hosaka-review.sh",
+  "script_hash": "f62b6a3fff0be2447997c18a57ccca0701fec9eb8ac2035d3de2ea5187bb798b",
+  "raw_voice_files": [
+    {
+      "voice": "qwen30-reviewer",
+      "provider": "deepseek-coder",
+      "provider_seen": "deepseek-coder",
+      "path": "tasks/in-progress/fix-2026-08-27-macos-focus-theft/evidence/review/qwen30-reviewer-raw.md",
+      "ts": "2026-08-28T00:29:35.340Z"
+    },
+    {
+      "voice": "deepseek-technical",
+      "provider": "deepseek-coder",
+      "provider_seen": "deepseek-coder",
+      "path": "tasks/in-progress/fix-2026-08-27-macos-focus-theft/evidence/review/deepseek-technical-raw.md",
+      "ts": "2026-08-28T00:29:38.321Z"
+    }
+  ],
+  "skipped_voice_files": [
+    {
+      "voice": "codex-reviewer",
+      "provider": "codex",
+      "provider_seen": "codex",
+      "path": "tasks/in-progress/fix-2026-08-27-macos-focus-theft/evidence/review/codex-reviewer-raw.md",
+      "ts": "2026-08-28T00:29:32.065Z",
+      "reason": "exec_error:spawnSync /bin/sh ETIMEDOUT"
+    },
+    {
+      "voice": "claude-opus-reviewer",
+      "provider": "opus",
+      "provider_seen": "opus",
+      "path": "tasks/in-progress/fix-2026-08-27-macos-focus-theft/evidence/review/claude-opus-reviewer-raw.md",
+      "ts": "2026-08-28T00:29:32.066Z",
+      "reason": "unavailable:review-provider-bridge: [Errno 2] No such file or directory: 'claude'"
+    },
+    {
+      "voice": "gemini-reviewer",
+      "provider": "gemini",
+      "provider_seen": "gemini",
+      "path": "tasks/in-progress/fix-2026-08-27-macos-focus-theft/evidence/review/gemini-reviewer-raw.md",
+      "ts": "2026-08-28T00:29:32.066Z",
+      "reason": "exec_error:gemini-reviewer failed with exit 1: Warning: Basic terminal detected (TERM=dumb). Visual rendering will be limited. For the best experience, use a terminal emulator with truecolor support. Warning: 256-color support not detected. Using a terminal with at least 256-color support is recommended for a better visual experience. Error authenticating: IneligibleTierError: This client is no longer supported for Gemini Code Assist for individuals. To continue using Gemini, please mig"
+    }
+  ]
+}

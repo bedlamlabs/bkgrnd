@@ -1,0 +1,67 @@
+id: "fix-2026-08-27-macos-focus-theft"
+title: "Prevent macOS menu-bar focus theft"
+priority: P0
+status: dev-complete
+project: bkgrnd
+created_at: "2026-08-27"
+updated_at: "2026-08-28"
+complexity: 3
+hotfix: true
+ui_changes: false
+non_web_task: true
+domains: ["desktop", "macos", "windowing"]
+depends_on: []
+summary: >
+  Stop the bkgrnd menu-bar panel from forcing itself frontmost through Tao's
+  activateIgnoringOtherApps path while preserving normal tray visibility,
+  dismissal, and application behavior.
+
+files_touched:
+  - src-tauri/src/lib.rs
+
+acceptance_tests:
+  - id: AT-1
+    criterion: "Opening bkgrnd from its menu-bar icon does not replace the user's frontmost application."
+    traces_to: "Feature 1"
+    verify:
+      localhost:
+        primary:
+          tool: bash
+          cmd: "export TASK_DIR=${HOSAKA_TASK_DIR:-tasks/in-progress/fix-2026-08-27-macos-focus-theft}; bash \"$TASK_DIR/tests/macos-focus-retention.test.sh\""
+          expect: contains "AT-1 PASS"
+      production:
+        primary:
+          tool: bash
+          cmd: "export TASK_DIR=${HOSAKA_TASK_DIR:-tasks/dev-complete/fix-2026-08-27-macos-focus-theft}; bash \"$TASK_DIR/tests/macos-focus-retention.test.sh\" --installed"
+          expect: contains "AT-1 PASS"
+  - id: AT-2
+    criterion: "The menu-bar panel still opens and dismisses normally after the focus fix."
+    traces_to: "Feature 2"
+    verify:
+      localhost:
+        primary:
+          tool: bash
+          cmd: "cargo test --manifest-path src-tauri/Cargo.toml"
+          expect: exit_0
+      production:
+        primary:
+          tool: bash
+          cmd: "export TASK_DIR=${HOSAKA_TASK_DIR:-tasks/dev-complete/fix-2026-08-27-macos-focus-theft}; bash \"$TASK_DIR/tests/macos-focus-retention.test.sh\" --installed"
+          expect: contains "AT-2 PASS"
+
+red_tdd:
+  commands:
+    - id: AT-1
+      cmd: "TASK_DIR=${HOSAKA_TASK_DIR:-tasks/backlog/fix-2026-08-27-macos-focus-theft}; bash \"$TASK_DIR/tests/macos-focus-retention.test.sh\""
+    - id: AT-2
+      cmd: "TASK_DIR=${HOSAKA_TASK_DIR:-tasks/backlog/fix-2026-08-27-macos-focus-theft}; bash \"$TASK_DIR/tests/macos-focus-retention.test.sh\""
+  baseline_all_fail: true
+  red_evidence: "The existing tray toggle explicitly calls WebviewWindow::set_focus, which Tao implements with activateIgnoringOtherApps:YES on macOS."
+
+external_blockers: []
+
+production_verification_spec:
+  base_url: "installed-macos-app"
+
+baseline_hashes:
+  "macos-focus-retention.test.sh": "8837c897ce5723192cfac807bab68256b0f6c268b35ebefb6904220d41788959"

@@ -1,0 +1,49 @@
+{
+  "version": "1.0",
+  "timestamp": "2026-08-28T00:26:54Z",
+  "task_dir": "fix-2026-08-27-macos-focus-theft",
+  "verdict": "FAIL_EXPECTED",
+  "generated_by": "run-red-tdd.sh",
+  "script_hash": "426e5d0a4a1fee749270f9605520a771cd6cf0c168118e7c2caab2a1513efab8",
+  "total": 2,
+  "failed_expected": 2,
+  "unexpected_pass": 0,
+  "harness_error": 0,
+  "required_cases": [
+    {
+      "id": "AT-1",
+      "type": "acceptance"
+    },
+    {
+      "id": "AT-2",
+      "type": "acceptance"
+    }
+  ],
+  "covered_cases": [
+    "AT-1",
+    "AT-2"
+  ],
+  "missing_cases": [],
+  "results": [
+    {
+      "id": "AT-1",
+      "cmd": "TASK_DIR=${HOSAKA_TASK_DIR:-tasks/backlog/fix-2026-08-27-macos-focus-theft}; bash \"$TASK_DIR/tests/macos-focus-retention.test.sh\"",
+      "status": "FAIL_EXPECTED",
+      "exit_code": 1,
+      "output_snippet": "AT-1 FAIL: tray toggle still reaches Tao set_focus/activateIgnoringOtherApps",
+      "log_file": "/Users/geoffmccaleb/bkgrnd/tasks/backlog/fix-2026-08-27-macos-focus-theft/evidence/red-tdd-AT-1.log",
+      "red_pass": true,
+      "duration_ms": 0
+    },
+    {
+      "id": "AT-2",
+      "cmd": "TASK_DIR=${HOSAKA_TASK_DIR:-tasks/backlog/fix-2026-08-27-macos-focus-theft}; bash \"$TASK_DIR/tests/macos-focus-retention.test.sh\"",
+      "status": "FAIL_EXPECTED",
+      "exit_code": 1,
+      "output_snippet": "AT-1 FAIL: tray toggle still reaches Tao set_focus/activateIgnoringOtherApps",
+      "log_file": "/Users/geoffmccaleb/bkgrnd/tasks/backlog/fix-2026-08-27-macos-focus-theft/evidence/red-tdd-AT-2.log",
+      "red_pass": true,
+      "duration_ms": 0
+    }
+  ]
+}

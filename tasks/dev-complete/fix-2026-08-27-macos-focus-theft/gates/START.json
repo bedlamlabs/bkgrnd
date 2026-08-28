@@ -1,0 +1,14 @@
+{
+  "gate": "START",
+  "timestamp": "2026-08-28T00:28:11Z",
+  "task_id": "fix-2026-08-27-macos-focus-theft",
+  "task_title": "Prevent macOS menu-bar focus theft",
+  "agent_model": "hosaka-gate.sh",
+  "summary": "Validated task ready to begin development",
+  "transition": "backlog->in-progress",
+  "decisions": [],
+  "skipped_checks": [],
+  "source_artifacts": ["backlog/fix-2026-08-27-macos-focus-theft/task.yaml"],
+  "start_commit": "7440599611028d63744fb114a21a8cc328993dd4",
+  "spec_hash": "823d422387a40bac54242281a9cced2be62d315b22de412fb276981634c7de06"
+}

@@ -1,0 +1,29 @@
+{
+  "task_dir": "fix-2026-08-27-macos-focus-theft",
+  "verdict": "PASS",
+  "gate": null,
+  "reason": "Test script executed successfully with no errors and passed the assertions.",
+  "tools_used": [
+    "test_runner",
+    "file_read",
+    "code_search"
+  ],
+  "tool_types_count": 3,
+  "turns": 2,
+  "elapsed_seconds": 31.9,
+  "total_tokens": 10120,
+  "investigation_log": [
+    "cat /Users/geoffmccaleb/bkgrnd/tasks/code-complete/fix-2026-08-27-macos-focus-theft/spec.md",
+    "bash /Users/geoffmccaleb/bkgrnd/tasks/code-complete/fix-2026-08-27-macos-focus-theft/tests/macos-focus-retention.test.sh",
+    "rg -n 'Prevent|macOS|menu\\-bar|focus|theft|Stop|bkgrnd|panel|from|forcing|itself|frontmost' /Users/geoffmccaleb/bkgrnd/src-tauri/src/lib.rs",
+    "PARSE_ERROR",
+    "bash /Users/geoffmccaleb/bkgrnd/tasks/code-complete/fix-2026-08-27-macos-focus-theft/tests/macos-focus-retention.test.sh"
+  ],
+  "reject_reason_code": null,
+  "project": "bkgrnd",
+  "profile_used": "webapp",
+  "original_verdict": "PASS",
+  "timestamp": "2026-08-28T00:31:28Z",
+  "generated_by": "helga-gate.sh",
+  "runner_hash": "2e18dc40c9152a327b7f41a86fa88e24ac7d68e4388a202884ca4d06ba740271"
+}

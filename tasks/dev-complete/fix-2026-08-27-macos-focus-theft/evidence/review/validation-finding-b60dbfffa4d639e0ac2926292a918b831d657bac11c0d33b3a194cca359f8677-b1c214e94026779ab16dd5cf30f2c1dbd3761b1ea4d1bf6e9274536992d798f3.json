@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "finding_fingerprint": "b1c214e94026779ab16dd5cf30f2c1dbd3761b1ea4d1bf6e9274536992d798f3",
+  "original_agent": "qwen30-reviewer",
+  "validation_agent": "validation-agent-b1c214e94026779ab16dd5cf30f2c1dbd3761b1ea4d1bf6e9274536992d798f3",
+  "provider": "codex",
+  "verdict": "FALSE",
+  "confidence": 100,
+  "score": 0,
+  "notes": "Removal is the explicit P0 fix: task red evidence identifies `set_focus()` as invoking macOS `activateIgnoringOtherApps:YES`; AT-1 verifies focus retention and AT-2 covers opening/dismissal behavior.",
+  "timestamp": "2026-08-28T00:29:46.033Z",
+  "generated_by": "hosaka-review-runner.mjs",
+  "runner_hash": "b60dbfffa4d639e0ac2926292a918b831d657bac11c0d33b3a194cca359f8677"
+}

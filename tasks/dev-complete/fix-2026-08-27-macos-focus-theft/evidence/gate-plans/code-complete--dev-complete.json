@@ -1,0 +1,15 @@
+{
+  "version": "1.0",
+  "transition": "code-complete->dev-complete",
+  "task_path": "/Users/geoffmccaleb/bkgrnd/tasks/code-complete/fix-2026-08-27-macos-focus-theft",
+  "workflow_mode": "turbo",
+  "bypass_questions": "forbidden",
+  "prerequisites": [
+    {
+      "predicate": "qa_complete",
+      "owner": "scripts/helga-gate.sh",
+      "command": "bash ~/.hosaka/scripts/helga-gate.sh \"/Users/geoffmccaleb/bkgrnd/tasks/code-complete/fix-2026-08-27-macos-focus-theft\""
+    }
+  ],
+  "generated_by": "hosaka-gate-plan.sh"
+}

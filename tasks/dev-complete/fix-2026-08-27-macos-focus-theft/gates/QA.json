@@ -1,0 +1,12 @@
+{
+  "gate": "QA",
+  "timestamp": "2026-08-28T00:32:08Z",
+  "task_id": "fix-2026-08-27-macos-focus-theft",
+  "task_title": "Prevent macOS menu-bar focus theft",
+  "agent_model": "hosaka-gate.sh",
+  "summary": "Validated QA pass before promoting to dev-complete",
+  "transition": "code-complete->dev-complete",
+  "decisions": [],
+  "skipped_checks": ["hosaka-verify.sh QA (Helga PASS)"],
+  "source_artifacts": ["code-complete/fix-2026-08-27-macos-focus-theft/task.yaml"]
+}

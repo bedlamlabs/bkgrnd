@@ -200,7 +200,6 @@ fn toggle_window(window: &WebviewWindow) {
     } else {
         let _ = window.move_window(Position::TrayBottomCenter);
         let _ = window.show();
-        let _ = window.set_focus();
     }
 }
 

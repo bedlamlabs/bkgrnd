@@ -1,0 +1,20 @@
+{
+  "version": "1.0",
+  "transition": "in-progress->code-complete",
+  "task_path": "/Users/geoffmccaleb/bkgrnd/tasks/in-progress/fix-2026-08-27-macos-focus-theft",
+  "workflow_mode": "turbo",
+  "bypass_questions": "forbidden",
+  "prerequisites": [
+    {
+      "predicate": "localhost_behavior_verified",
+      "owner": "scripts/verify-localhost.sh",
+      "command": "bash ~/.hosaka/scripts/verify-localhost.sh \"/Users/geoffmccaleb/bkgrnd/tasks/in-progress/fix-2026-08-27-macos-focus-theft\""
+    },
+    {
+      "predicate": "peer_review_complete",
+      "owner": "scripts/hosaka-review-runner.sh",
+      "command": "bash ~/.hosaka/scripts/hosaka-review-runner.sh \"/Users/geoffmccaleb/bkgrnd/tasks/in-progress/fix-2026-08-27-macos-focus-theft\""
+    }
+  ],
+  "generated_by": "hosaka-gate-plan.sh"
+}

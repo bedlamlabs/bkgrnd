@@ -1,0 +1,25 @@
+{
+  "version": "1.0",
+  "transition": "backlog->in-progress",
+  "task_path": "/Users/geoffmccaleb/bkgrnd/tasks/backlog/fix-2026-08-27-macos-focus-theft",
+  "workflow_mode": "turbo",
+  "bypass_questions": "forbidden",
+  "prerequisites": [
+    {
+      "predicate": "baseline_hashes_current",
+      "owner": "scripts/hash-baselines.sh",
+      "command": "bash ~/.hosaka/scripts/hash-baselines.sh \"/Users/geoffmccaleb/bkgrnd/tasks/backlog/fix-2026-08-27-macos-focus-theft\""
+    },
+    {
+      "predicate": "red_tdd_valid",
+      "owner": "scripts/run-red-tdd.sh",
+      "command": "bash ~/.hosaka/scripts/run-red-tdd.sh \"/Users/geoffmccaleb/bkgrnd/tasks/backlog/fix-2026-08-27-macos-focus-theft\""
+    },
+    {
+      "predicate": "requirements_contract_approved",
+      "owner": "scripts/contract-approve.sh",
+      "command": "bash ~/.hosaka/scripts/contract-approve.sh \"/Users/geoffmccaleb/bkgrnd/tasks/backlog/fix-2026-08-27-macos-focus-theft\""
+    }
+  ],
+  "generated_by": "hosaka-gate-plan.sh"
+}
