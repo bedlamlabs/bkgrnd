@@ -50,6 +50,10 @@ struct AppState {
     stream_cache: Arc<Mutex<HashMap<String, CachedStreamUrl>>>,
     stream_failures: Arc<Mutex<HashMap<String, CachedStreamFailure>>>,
     stream_resolves: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
+    // Which resolver strategy produced each cached stream URL, and strategies
+    // temporarily skipped because their URLs were rejected mid-stream.
+    stream_sources: Arc<Mutex<HashMap<String, (String, &'static str)>>>,
+    demoted_sources: Arc<Mutex<HashMap<(String, &'static str), Instant>>>,
     search_cache: Arc<Mutex<HashMap<String, (Instant, Vec<SearchResult>)>>>,
     ytdlp_sem: Arc<Semaphore>,
     local_status: Arc<Mutex<Option<LocalStatusRecord>>>,
@@ -1281,11 +1285,19 @@ async fn stream_audio(
         {
             r
         }
-        Ok(r) if resolved.cached && is_stale_stream_status(r.status()) => {
+        // A fresh URL can also be refused (a strategy cut-off); give it the
+        // same single demote-and-retry as a stale cached one.
+        Ok(r)
+            if is_stale_stream_status(r.status())
+                && (resolved.cached || r.status() == StatusCode::FORBIDDEN) =>
+        {
             warn!(
                 "upstream returned {} for cached stream url; re-resolving and retrying",
                 r.status()
             );
+            if r.status() == StatusCode::FORBIDDEN {
+                demote_stream_source(&state, &q.url, &direct_url).await;
+            }
             evict_stream_cache(&state, &q.url).await;
             direct_url = match resolve_stream_url(&state, &q.url).await {
                 Ok(refreshed) => refreshed.url,
@@ -1379,11 +1391,16 @@ async fn stream_audio(
 
             let (tx, rx) = tokio::sync::mpsc::channel::<Result<Bytes, std::io::Error>>(8);
             let http = state.http.clone();
-            let upstream_url = direct_url.clone();
+            let mut upstream_url = direct_url.clone();
             let cache = state.stream_cache.clone();
+            let relay_state = state.clone();
             let source_key = q.url.clone();
             tokio::spawn(async move {
                 use futures_util::StreamExt;
+                let expected_total = content_range_total(&first);
+                // At most one re-resolve per relay, so a video every strategy
+                // cuts off cannot loop through resolves chunk after chunk.
+                let mut healed = false;
                 let mut current = Some(first);
                 let mut next_pos = first_end.checked_add(1);
                 'relay: while let Some(resp) = current.take() {
@@ -1423,22 +1440,42 @@ async fn stream_audio(
                         break;
                     };
                     let chunk_end = chunk_ceiling.min(cend);
-                    match http
-                        .get(upstream_url.as_str())
-                        .header(
-                            header::RANGE,
-                            format!("bytes={}-{}", chunk_start, chunk_end),
-                        )
-                        .send()
-                        .await
-                    {
+                    let fetch_chunk = |url: String| {
+                        let http = http.clone();
+                        async move {
+                            http.get(url.as_str())
+                                .header(header::RANGE, format!("bytes={chunk_start}-{chunk_end}"))
+                                .send()
+                                .await
+                        }
+                    };
+                    let mut attempt = fetch_chunk(upstream_url.clone()).await;
+                    // The client already has 206 headers for the whole range, so
+                    // a strategy cut-off mid-relay must be healed in place: demote
+                    // it, re-resolve, and continue the same range from the new URL.
+                    if !healed && matches!(&attempt, Ok(r) if r.status() == StatusCode::FORBIDDEN) {
+                        healed = true;
+                        demote_stream_source(&relay_state, &source_key, &upstream_url).await;
+                        evict_stream_cache(&relay_state, &source_key).await;
+                        match resolve_stream_url(&relay_state, &source_key).await {
+                            Ok(refreshed) => {
+                                upstream_url = refreshed.url;
+                                attempt = fetch_chunk(upstream_url.clone()).await;
+                            }
+                            Err(e) => error!("mid-relay stream re-resolve failed: {e}"),
+                        }
+                    }
+                    match attempt {
+                        // A re-resolve can land on a different format; only
+                        // splice bytes from the same file (same total size).
                         Ok(r)
-                            if valid_progressive_range_response(
-                                &r,
-                                chunk_start,
-                                chunk_end,
-                                true,
-                            ) =>
+                            if content_range_total(&r) == expected_total
+                                && valid_progressive_range_response(
+                                    &r,
+                                    chunk_start,
+                                    chunk_end,
+                                    true,
+                                ) =>
                         {
                             current = Some(r);
                             next_pos = chunk_end.checked_add(1);
@@ -1704,6 +1741,14 @@ async fn stream_head(
 }
 
 /// Extract the total size from a Content-Range header ("bytes 0-99/1234").
+fn content_range_total(response: &reqwest::Response) -> Option<u64> {
+    response
+        .headers()
+        .get(header::CONTENT_RANGE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(parse_content_range_total)
+}
+
 fn parse_content_range_total(value: &str) -> Option<u64> {
     value.rsplit('/').next()?.trim().parse::<u64>().ok()
 }
@@ -1763,10 +1808,12 @@ fn progressive_response_span(response: &reqwest::Response) -> Option<u64> {
 
 async fn evict_stream_cache(state: &AppState, url: &str) {
     state.stream_cache.lock().await.remove(url);
+    state.stream_sources.lock().await.remove(url);
 }
 
 async fn clear_stream_resolution_cache(state: &AppState, url: &str) {
     state.stream_cache.lock().await.remove(url);
+    state.stream_sources.lock().await.remove(url);
     state.stream_failures.lock().await.remove(url);
 }
 
@@ -1863,10 +1910,12 @@ async fn resolve_stream_url(
 
     let start = Instant::now();
     let mut resolved_source = "yt-dlp".to_string();
+    let mut strategy_source = None;
     let resolve_result: Result<String, StreamResolveError> =
         match resolve_direct_url(state, url).await {
             Ok(resolved) => {
                 resolved_source = resolved.source.to_string();
+                strategy_source = Some(resolved.source);
                 Ok(resolved.url)
             }
             Err(e) if e.terminal => {
@@ -1923,6 +1972,11 @@ async fn resolve_stream_url(
     // entries forever.
     let now = Instant::now();
     cache.retain(|_, entry| entry.expires_at > now);
+    state
+        .stream_sources
+        .lock()
+        .await
+        .retain(|key, _| cache.contains_key(key));
     cache.insert(
         url.to_string(),
         CachedStreamUrl {
@@ -1930,6 +1984,15 @@ async fn resolve_stream_url(
             expires_at: Instant::now() + ttl,
         },
     );
+    // Record the producing strategy before releasing the cache lock so no
+    // request can see the new URL without its source.
+    {
+        let mut sources = state.stream_sources.lock().await;
+        match strategy_source {
+            Some(source) => sources.insert(url.to_string(), (resolved.clone(), source)),
+            None => sources.remove(url),
+        };
+    }
     drop(cache);
 
     Ok(ResolvedStream {
@@ -2095,6 +2158,51 @@ async fn probe_direct_stream_url(state: &AppState, direct_url: &str) -> bool {
     )
 }
 
+/// How long a strategy is skipped for a video after one of its URLs for that
+/// video is rejected mid-stream.
+const SOURCE_DEMOTION_TTL: Duration = Duration::from_secs(10 * 60);
+
+async fn active_demoted_sources(state: &AppState, source_url: &str) -> Vec<&'static str> {
+    let mut demoted = state.demoted_sources.lock().await;
+    let now = Instant::now();
+    demoted.retain(|_, until| *until > now);
+    demoted
+        .keys()
+        .filter(|(url, _)| url == source_url)
+        .map(|(_, source)| *source)
+        .collect()
+}
+
+/// A cached URL is evicted ~5 minutes before YouTube's own expiry, so a 403 on
+/// one means the strategy that produced it hands out URLs YouTube cuts off
+/// partway (android_vr without a PO token stops after ~2 MiB). Skip that
+/// strategy for this video for a while so the re-resolve falls through to the
+/// next one. Scoped per video so one gated or quirky video cannot push every
+/// other stream off the preferred strategy.
+async fn demote_stream_source(state: &AppState, source_url: &str, failed_url: &str) {
+    let source = {
+        let mut sources = state.stream_sources.lock().await;
+        // A concurrent request may already have re-resolved this video; only
+        // blame the strategy that produced the URL that actually failed.
+        match sources.get(source_url) {
+            Some((direct_url, source)) if direct_url == failed_url => {
+                let source = *source;
+                sources.remove(source_url);
+                source
+            }
+            _ => return,
+        }
+    };
+    warn!(
+        "demoting resolver strategy {source} for {source_url} for {}s after mid-stream rejection",
+        SOURCE_DEMOTION_TTL.as_secs()
+    );
+    state.demoted_sources.lock().await.insert(
+        (source_url.to_string(), source),
+        Instant::now() + SOURCE_DEMOTION_TTL,
+    );
+}
+
 async fn resolve_direct_url(
     state: &AppState,
     url: &str,
@@ -2108,8 +2216,14 @@ async fn resolve_direct_url(
 
     let _permit = state.ytdlp_sem.acquire().await;
 
+    // Strategies demoted for this video are tried last rather than skipped,
+    // so a transient failure elsewhere can still fall back to them.
+    let demoted = active_demoted_sources(state, url).await;
+    let mut strategies = resolver_strategy_specs();
+    strategies.sort_by_key(|strategy| demoted.contains(&strategy.source));
+
     let mut last_error: Option<StreamResolveError> = None;
-    for strategy in resolver_strategy_specs() {
+    for strategy in strategies {
         let mut cmd = ytdlp_command();
         cmd.args(["-f", format, "--get-url", "--no-playlist"]);
         if strategy.source == "pot-provider" {
@@ -2710,6 +2824,8 @@ async fn main() -> anyhow::Result<()> {
         stream_cache: Arc::new(Mutex::new(HashMap::new())),
         stream_failures: Arc::new(Mutex::new(HashMap::new())),
         stream_resolves: Arc::new(Mutex::new(HashMap::new())),
+        stream_sources: Arc::new(Mutex::new(HashMap::new())),
+        demoted_sources: Arc::new(Mutex::new(HashMap::new())),
         search_cache: Arc::new(Mutex::new(HashMap::new())),
         ytdlp_sem: Arc::new(Semaphore::new(YTDLP_MAX_CONCURRENCY)),
         local_status: Arc::new(Mutex::new(None)),
@@ -2799,6 +2915,8 @@ mod tests {
             stream_cache: Arc::new(Mutex::new(HashMap::new())),
             stream_failures: Arc::new(Mutex::new(HashMap::new())),
             stream_resolves: Arc::new(Mutex::new(HashMap::new())),
+            stream_sources: Arc::new(Mutex::new(HashMap::new())),
+            demoted_sources: Arc::new(Mutex::new(HashMap::new())),
             search_cache: Arc::new(Mutex::new(HashMap::new())),
             ytdlp_sem: Arc::new(Semaphore::new(1)),
             local_status: Arc::new(Mutex::new(None)),
@@ -2979,6 +3097,270 @@ mod tests {
             state.stream_cache.lock().await.get(source_url).unwrap().url,
             format!("http://{address}/fresh")
         );
+    }
+
+    fn range_response(headers: &HeaderMap, total: u64) -> Response<Body> {
+        let value = headers[header::RANGE].to_str().unwrap();
+        let (start, end) = value
+            .strip_prefix("bytes=")
+            .unwrap()
+            .split_once('-')
+            .unwrap();
+        let start: u64 = start.parse().unwrap();
+        let end = end.parse::<u64>().unwrap_or(total - 1).min(total - 1);
+        Response::builder()
+            .status(StatusCode::PARTIAL_CONTENT)
+            .header(
+                header::CONTENT_RANGE,
+                format!("bytes {start}-{end}/{total}"),
+            )
+            .body(Body::from(vec![b'a'; (end - start + 1) as usize]))
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn mid_stream_rejection_demotes_the_strategy_that_produced_the_url() {
+        let _env_guard = YTDLP_ENV_LOCK.lock().unwrap();
+        const TOTAL: u64 = 4 * PROXY_CHUNK;
+        // android_vr URLs serve the first chunk, then YouTube 403s later ranges.
+        let app = Router::new()
+            .route(
+                "/capped",
+                get(|headers: HeaderMap| async move {
+                    if headers[header::RANGE]
+                        .to_str()
+                        .unwrap()
+                        .starts_with("bytes=0-")
+                    {
+                        range_response(&headers, TOTAL)
+                    } else {
+                        StatusCode::FORBIDDEN.into_response()
+                    }
+                }),
+            )
+            .route(
+                "/good",
+                get(|headers: HeaderMap| async move { range_response(&headers, TOTAL) }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let fake_ytdlp = std::env::temp_dir().join(format!(
+            "bkgrnd-demote-ytdlp-{}-{unique}",
+            std::process::id()
+        ));
+        std::fs::write(
+            &fake_ytdlp,
+            format!(
+                "#!/bin/sh\ncase \"$*\" in\n  *player_client=android_vr*) printf '%s\\n' 'http://{address}/capped' ;;\n  *player_client=*) exit 1 ;;\n  *) printf '%s\\n' 'http://{address}/good' ;;\nesac\n"
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&fake_ytdlp, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let previous_ytdlp = std::env::var_os("WOPR_YTDLP_BIN");
+        std::env::set_var("WOPR_YTDLP_BIN", &fake_ytdlp);
+
+        let state = test_state(reqwest::Client::new());
+        let source_url = "https://www.youtube.com/watch?v=demote-source";
+        let fetch = |range: &'static str| {
+            let state = state.clone();
+            async move {
+                let mut headers = HeaderMap::new();
+                headers.insert(header::RANGE, HeaderValue::from_static(range));
+                stream_audio(
+                    State(state),
+                    headers,
+                    Query(StreamQuery {
+                        url: source_url.to_string(),
+                        token: None,
+                        proxy: Some(true),
+                        castsig: None,
+                    }),
+                )
+                .await
+                .into_response()
+                .status()
+            }
+        };
+        let first = fetch("bytes=0-1023").await;
+        let later = fetch("bytes=2097152-2098175").await;
+        let cached_url = state
+            .stream_cache
+            .lock()
+            .await
+            .get(source_url)
+            .unwrap()
+            .url
+            .clone();
+        let demoted = active_demoted_sources(&state, source_url).await;
+        let other_video_demoted =
+            active_demoted_sources(&state, "https://www.youtube.com/watch?v=other").await;
+
+        match previous_ytdlp {
+            Some(value) => std::env::set_var("WOPR_YTDLP_BIN", value),
+            None => std::env::remove_var("WOPR_YTDLP_BIN"),
+        }
+        std::fs::remove_file(&fake_ytdlp).unwrap();
+
+        assert_eq!(first, StatusCode::PARTIAL_CONTENT);
+        assert_eq!(later, StatusCode::PARTIAL_CONTENT);
+        assert_eq!(cached_url, format!("http://{address}/good"));
+        assert_eq!(demoted, vec!["legacy-android-vr"]);
+        assert!(other_video_demoted.is_empty());
+    }
+
+    #[tokio::test]
+    async fn relay_heals_a_mid_range_strategy_cutoff_in_place() {
+        let (status, body_len, demoted) = relay_across_cutoff(4 * PROXY_CHUNK).await;
+        assert_eq!(status, StatusCode::PARTIAL_CONTENT);
+        assert_eq!(body_len, Some(3 * PROXY_CHUNK));
+        assert_eq!(demoted, vec!["legacy-android-vr"]);
+    }
+
+    #[tokio::test]
+    async fn relay_does_not_splice_a_different_file_after_re_resolve() {
+        let (status, body_len, _) = relay_across_cutoff(5 * PROXY_CHUNK).await;
+        assert_eq!(status, StatusCode::PARTIAL_CONTENT);
+        // The body ends early (an error) rather than mixing two encodings.
+        assert_eq!(body_len, None);
+    }
+
+    /// Requests 3 MiB through a strategy whose URL 403s from 2 MiB on; the
+    /// re-resolved URL reports `good_total` bytes.
+    async fn relay_across_cutoff(good_total: u64) -> (StatusCode, Option<u64>, Vec<&'static str>) {
+        let _env_guard = YTDLP_ENV_LOCK.lock().unwrap();
+        const TOTAL: u64 = 4 * PROXY_CHUNK;
+        let app = Router::new()
+            .route(
+                "/capped",
+                get(|headers: HeaderMap| async move {
+                    let value = headers[header::RANGE].to_str().unwrap().to_string();
+                    let start: u64 = value
+                        .strip_prefix("bytes=")
+                        .and_then(|v| v.split('-').next())
+                        .unwrap()
+                        .parse()
+                        .unwrap();
+                    if start < 2 * PROXY_CHUNK {
+                        range_response(&headers, TOTAL)
+                    } else {
+                        StatusCode::FORBIDDEN.into_response()
+                    }
+                }),
+            )
+            .route(
+                "/good",
+                get(move |headers: HeaderMap| async move { range_response(&headers, good_total) }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let fake_ytdlp = std::env::temp_dir().join(format!(
+            "bkgrnd-relay-heal-ytdlp-{}-{unique}",
+            std::process::id()
+        ));
+        std::fs::write(
+            &fake_ytdlp,
+            format!(
+                "#!/bin/sh\ncase \"$*\" in\n  *player_client=android_vr*) printf '%s\\n' 'http://{address}/capped' ;;\n  *player_client=*) exit 1 ;;\n  *) printf '%s\\n' 'http://{address}/good' ;;\nesac\n"
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&fake_ytdlp, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let previous_ytdlp = std::env::var_os("WOPR_YTDLP_BIN");
+        std::env::set_var("WOPR_YTDLP_BIN", &fake_ytdlp);
+
+        let state = test_state(reqwest::Client::new());
+        let source_url = "https://www.youtube.com/watch?v=relay-heal";
+        let wanted = 3 * PROXY_CHUNK;
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::RANGE,
+            HeaderValue::from_str(&format!("bytes=0-{}", wanted - 1)).unwrap(),
+        );
+        let response = stream_audio(
+            State(state.clone()),
+            headers,
+            Query(StreamQuery {
+                url: source_url.to_string(),
+                token: None,
+                proxy: Some(true),
+                castsig: None,
+            }),
+        )
+        .await
+        .into_response();
+        let status = response.status();
+        let body = to_bytes(response.into_body(), (wanted + 1) as usize).await;
+
+        match previous_ytdlp {
+            Some(value) => std::env::set_var("WOPR_YTDLP_BIN", value),
+            None => std::env::remove_var("WOPR_YTDLP_BIN"),
+        }
+        std::fs::remove_file(&fake_ytdlp).unwrap();
+
+        let demoted = active_demoted_sources(&state, source_url).await;
+        (status, body.ok().map(|bytes| bytes.len() as u64), demoted)
+    }
+
+    #[tokio::test]
+    async fn resolver_tries_every_strategy_when_all_are_demoted() {
+        let _env_guard = YTDLP_ENV_LOCK.lock().unwrap();
+        let app = Router::new().route(
+            "/good",
+            get(|headers: HeaderMap| async move { range_response(&headers, 4 * PROXY_CHUNK) }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let fake_ytdlp = std::env::temp_dir().join(format!(
+            "bkgrnd-all-demoted-ytdlp-{}-{unique}",
+            std::process::id()
+        ));
+        std::fs::write(
+            &fake_ytdlp,
+            format!("#!/bin/sh\nprintf '%s\\n' 'http://{address}/good'\n"),
+        )
+        .unwrap();
+        std::fs::set_permissions(&fake_ytdlp, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let previous_ytdlp = std::env::var_os("WOPR_YTDLP_BIN");
+        std::env::set_var("WOPR_YTDLP_BIN", &fake_ytdlp);
+
+        let state = test_state(reqwest::Client::new());
+        let source_url = "https://www.youtube.com/watch?v=all-demoted";
+        {
+            let mut demoted = state.demoted_sources.lock().await;
+            for strategy in resolver_strategy_specs() {
+                demoted.insert(
+                    (source_url.to_string(), strategy.source),
+                    Instant::now() + SOURCE_DEMOTION_TTL,
+                );
+            }
+        }
+        let resolved = resolve_direct_url(&state, source_url).await;
+
+        match previous_ytdlp {
+            Some(value) => std::env::set_var("WOPR_YTDLP_BIN", value),
+            None => std::env::remove_var("WOPR_YTDLP_BIN"),
+        }
+        std::fs::remove_file(&fake_ytdlp).unwrap();
+
+        assert_eq!(resolved.unwrap().source, "pot-provider");
     }
 
     #[tokio::test]
