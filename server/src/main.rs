@@ -54,6 +54,9 @@ struct AppState {
     // temporarily skipped because their URLs were rejected mid-stream.
     stream_sources: Arc<Mutex<HashMap<String, (String, &'static str)>>>,
     demoted_sources: Arc<Mutex<HashMap<(String, &'static str), Instant>>>,
+    // The strategy that last produced a usable URL; tried first next time so
+    // a cold start does not walk every failing strategy before it.
+    last_good_source: Arc<Mutex<Option<&'static str>>>,
     search_cache: Arc<Mutex<HashMap<String, (Instant, Vec<SearchResult>)>>>,
     ytdlp_sem: Arc<Semaphore>,
     local_status: Arc<Mutex<Option<LocalStatusRecord>>>,
@@ -2219,8 +2222,14 @@ async fn resolve_direct_url(
     // Strategies demoted for this video are tried last rather than skipped,
     // so a transient failure elsewhere can still fall back to them.
     let demoted = active_demoted_sources(state, url).await;
+    let last_good = *state.last_good_source.lock().await;
     let mut strategies = resolver_strategy_specs();
-    strategies.sort_by_key(|strategy| demoted.contains(&strategy.source));
+    strategies.sort_by_key(|strategy| {
+        (
+            demoted.contains(&strategy.source),
+            Some(strategy.source) != last_good,
+        )
+    });
 
     let mut last_error: Option<StreamResolveError> = None;
     for strategy in strategies {
@@ -2293,6 +2302,7 @@ async fn resolve_direct_url(
             if !direct.trim().is_empty() {
                 let direct = direct.trim();
                 if probe_direct_stream_url(state, direct).await {
+                    *state.last_good_source.lock().await = Some(strategy.source);
                     return Ok(DirectResolution {
                         url: direct.to_string(),
                         source: strategy.source,
@@ -2826,6 +2836,7 @@ async fn main() -> anyhow::Result<()> {
         stream_resolves: Arc::new(Mutex::new(HashMap::new())),
         stream_sources: Arc::new(Mutex::new(HashMap::new())),
         demoted_sources: Arc::new(Mutex::new(HashMap::new())),
+        last_good_source: Arc::new(Mutex::new(None)),
         search_cache: Arc::new(Mutex::new(HashMap::new())),
         ytdlp_sem: Arc::new(Semaphore::new(YTDLP_MAX_CONCURRENCY)),
         local_status: Arc::new(Mutex::new(None)),
@@ -2917,6 +2928,7 @@ mod tests {
             stream_resolves: Arc::new(Mutex::new(HashMap::new())),
             stream_sources: Arc::new(Mutex::new(HashMap::new())),
             demoted_sources: Arc::new(Mutex::new(HashMap::new())),
+            last_good_source: Arc::new(Mutex::new(None)),
             search_cache: Arc::new(Mutex::new(HashMap::new())),
             ytdlp_sem: Arc::new(Semaphore::new(1)),
             local_status: Arc::new(Mutex::new(None)),
@@ -3311,6 +3323,65 @@ mod tests {
 
         let demoted = active_demoted_sources(&state, source_url).await;
         (status, body.ok().map(|bytes| bytes.len() as u64), demoted)
+    }
+
+    #[tokio::test]
+    async fn resolver_tries_the_last_working_strategy_first() {
+        let _env_guard = YTDLP_ENV_LOCK.lock().unwrap();
+        let app = Router::new().route(
+            "/good",
+            get(|headers: HeaderMap| async move { range_response(&headers, 4 * PROXY_CHUNK) }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let fake_ytdlp = std::env::temp_dir().join(format!(
+            "bkgrnd-sticky-ytdlp-{}-{unique}",
+            std::process::id()
+        ));
+        let invocations =
+            std::env::temp_dir().join(format!("bkgrnd-sticky-log-{}-{unique}", std::process::id()));
+        // Only the default client works, as on HPX after the WAN IP change.
+        std::fs::write(
+            &fake_ytdlp,
+            format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\ncase \"$*\" in\n  *player_client=*) exit 1 ;;\n  *) printf '%s\\n' 'http://{address}/good' ;;\nesac\n",
+                invocations.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&fake_ytdlp, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let previous_ytdlp = std::env::var_os("WOPR_YTDLP_BIN");
+        std::env::set_var("WOPR_YTDLP_BIN", &fake_ytdlp);
+
+        let state = test_state(reqwest::Client::new());
+        let first = resolve_direct_url(&state, "https://www.youtube.com/watch?v=cold-one").await;
+        let calls_after_first = std::fs::read_to_string(&invocations)
+            .unwrap()
+            .lines()
+            .count();
+        let second = resolve_direct_url(&state, "https://www.youtube.com/watch?v=cold-two").await;
+        let calls_after_second = std::fs::read_to_string(&invocations)
+            .unwrap()
+            .lines()
+            .count();
+
+        match previous_ytdlp {
+            Some(value) => std::env::set_var("WOPR_YTDLP_BIN", value),
+            None => std::env::remove_var("WOPR_YTDLP_BIN"),
+        }
+        std::fs::remove_file(&fake_ytdlp).unwrap();
+        std::fs::remove_file(&invocations).unwrap();
+
+        assert_eq!(first.unwrap().source, "legacy-default");
+        assert_eq!(calls_after_first, resolver_strategy_specs().len());
+        assert_eq!(second.unwrap().source, "legacy-default");
+        assert_eq!(calls_after_second - calls_after_first, 1);
     }
 
     #[tokio::test]
