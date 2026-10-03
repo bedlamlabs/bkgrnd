@@ -1386,7 +1386,7 @@ async fn stream_audio(
 
             let (tx, rx) = tokio::sync::mpsc::channel::<Result<Bytes, std::io::Error>>(8);
             let http = state.http.clone();
-            let upstream_url = direct_url.clone();
+            let mut upstream_url = direct_url.clone();
             let cache = state.stream_cache.clone();
             let relay_state = state.clone();
             let source_key = q.url.clone();
@@ -1431,15 +1431,28 @@ async fn stream_audio(
                         break;
                     };
                     let chunk_end = chunk_ceiling.min(cend);
-                    match http
-                        .get(upstream_url.as_str())
-                        .header(
-                            header::RANGE,
-                            format!("bytes={}-{}", chunk_start, chunk_end),
-                        )
-                        .send()
-                        .await
-                    {
+                    let fetch_chunk = |url: String| {
+                        let http = http.clone();
+                        async move {
+                            http.get(url.as_str())
+                                .header(header::RANGE, format!("bytes={chunk_start}-{chunk_end}"))
+                                .send()
+                                .await
+                        }
+                    };
+                    let mut attempt = fetch_chunk(upstream_url.clone()).await;
+                    // The client already has 206 headers for the whole range, so
+                    // a strategy cut-off mid-relay must be healed in place: demote
+                    // it, re-resolve, and continue the same range from the new URL.
+                    if matches!(&attempt, Ok(r) if r.status() == StatusCode::FORBIDDEN) {
+                        demote_stream_source(&relay_state, &source_key, &upstream_url).await;
+                        evict_stream_cache(&relay_state, &source_key).await;
+                        if let Ok(refreshed) = resolve_stream_url(&relay_state, &source_key).await {
+                            upstream_url = refreshed.url;
+                            attempt = fetch_chunk(upstream_url.clone()).await;
+                        }
+                    }
+                    match attempt {
                         Ok(r)
                             if valid_progressive_range_response(
                                 &r,
@@ -1451,11 +1464,7 @@ async fn stream_audio(
                             current = Some(r);
                             next_pos = chunk_end.checked_add(1);
                         }
-                        failed => {
-                            if matches!(&failed, Ok(r) if r.status() == StatusCode::FORBIDDEN) {
-                                demote_stream_source(&relay_state, &source_key, &upstream_url)
-                                    .await;
-                            }
+                        _ => {
                             cache.lock().await.remove(&source_key);
                             let _ = tx
                                 .send(Err(std::io::Error::other("upstream chunk failed")))
@@ -1951,7 +1960,8 @@ async fn resolve_stream_url(
             expires_at: Instant::now() + ttl,
         },
     );
-    drop(cache);
+    // Record the producing strategy before releasing the cache lock so no
+    // request can see the new URL without its source.
     {
         let mut sources = state.stream_sources.lock().await;
         match strategy_source {
@@ -1959,6 +1969,7 @@ async fn resolve_stream_url(
             None => sources.remove(url),
         };
     }
+    drop(cache);
 
     Ok(ResolvedStream {
         url: resolved,
@@ -3177,6 +3188,92 @@ mod tests {
         assert_eq!(cached_url, format!("http://{address}/good"));
         assert_eq!(demoted, vec!["legacy-android-vr"]);
         assert!(other_video_demoted.is_empty());
+    }
+
+    #[tokio::test]
+    async fn relay_heals_a_mid_range_strategy_cutoff_in_place() {
+        let _env_guard = YTDLP_ENV_LOCK.lock().unwrap();
+        const TOTAL: u64 = 4 * PROXY_CHUNK;
+        let app = Router::new()
+            .route(
+                "/capped",
+                get(|headers: HeaderMap| async move {
+                    let value = headers[header::RANGE].to_str().unwrap().to_string();
+                    let start: u64 = value
+                        .strip_prefix("bytes=")
+                        .and_then(|v| v.split('-').next())
+                        .unwrap()
+                        .parse()
+                        .unwrap();
+                    if start < 2 * PROXY_CHUNK {
+                        range_response(&headers, TOTAL)
+                    } else {
+                        StatusCode::FORBIDDEN.into_response()
+                    }
+                }),
+            )
+            .route(
+                "/good",
+                get(|headers: HeaderMap| async move { range_response(&headers, TOTAL) }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let fake_ytdlp = std::env::temp_dir().join(format!(
+            "bkgrnd-relay-heal-ytdlp-{}-{unique}",
+            std::process::id()
+        ));
+        std::fs::write(
+            &fake_ytdlp,
+            format!(
+                "#!/bin/sh\ncase \"$*\" in\n  *player_client=android_vr*) printf '%s\\n' 'http://{address}/capped' ;;\n  *player_client=*) exit 1 ;;\n  *) printf '%s\\n' 'http://{address}/good' ;;\nesac\n"
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&fake_ytdlp, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let previous_ytdlp = std::env::var_os("WOPR_YTDLP_BIN");
+        std::env::set_var("WOPR_YTDLP_BIN", &fake_ytdlp);
+
+        let state = test_state(reqwest::Client::new());
+        let source_url = "https://www.youtube.com/watch?v=relay-heal";
+        let wanted = 3 * PROXY_CHUNK;
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::RANGE,
+            HeaderValue::from_str(&format!("bytes=0-{}", wanted - 1)).unwrap(),
+        );
+        let response = stream_audio(
+            State(state.clone()),
+            headers,
+            Query(StreamQuery {
+                url: source_url.to_string(),
+                token: None,
+                proxy: Some(true),
+                castsig: None,
+            }),
+        )
+        .await
+        .into_response();
+        let status = response.status();
+        let body = to_bytes(response.into_body(), (wanted + 1) as usize).await;
+
+        match previous_ytdlp {
+            Some(value) => std::env::set_var("WOPR_YTDLP_BIN", value),
+            None => std::env::remove_var("WOPR_YTDLP_BIN"),
+        }
+        std::fs::remove_file(&fake_ytdlp).unwrap();
+
+        assert_eq!(status, StatusCode::PARTIAL_CONTENT);
+        assert_eq!(body.unwrap().len() as u64, wanted);
+        assert_eq!(
+            active_demoted_sources(&state, source_url).await,
+            vec!["legacy-android-vr"]
+        );
     }
 
     #[tokio::test]
