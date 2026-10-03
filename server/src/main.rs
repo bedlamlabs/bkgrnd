@@ -1285,7 +1285,12 @@ async fn stream_audio(
         {
             r
         }
-        Ok(r) if resolved.cached && is_stale_stream_status(r.status()) => {
+        // A fresh URL can also be refused (a strategy cut-off); give it the
+        // same single demote-and-retry as a stale cached one.
+        Ok(r)
+            if is_stale_stream_status(r.status())
+                && (resolved.cached || r.status() == StatusCode::FORBIDDEN) =>
+        {
             warn!(
                 "upstream returned {} for cached stream url; re-resolving and retrying",
                 r.status()
@@ -1392,6 +1397,7 @@ async fn stream_audio(
             let source_key = q.url.clone();
             tokio::spawn(async move {
                 use futures_util::StreamExt;
+                let expected_total = content_range_total(&first);
                 let mut current = Some(first);
                 let mut next_pos = first_end.checked_add(1);
                 'relay: while let Some(resp) = current.take() {
@@ -1447,19 +1453,25 @@ async fn stream_audio(
                     if matches!(&attempt, Ok(r) if r.status() == StatusCode::FORBIDDEN) {
                         demote_stream_source(&relay_state, &source_key, &upstream_url).await;
                         evict_stream_cache(&relay_state, &source_key).await;
-                        if let Ok(refreshed) = resolve_stream_url(&relay_state, &source_key).await {
-                            upstream_url = refreshed.url;
-                            attempt = fetch_chunk(upstream_url.clone()).await;
+                        match resolve_stream_url(&relay_state, &source_key).await {
+                            Ok(refreshed) => {
+                                upstream_url = refreshed.url;
+                                attempt = fetch_chunk(upstream_url.clone()).await;
+                            }
+                            Err(e) => error!("mid-relay stream re-resolve failed: {e}"),
                         }
                     }
                     match attempt {
+                        // A re-resolve can land on a different format; only
+                        // splice bytes from the same file (same total size).
                         Ok(r)
-                            if valid_progressive_range_response(
-                                &r,
-                                chunk_start,
-                                chunk_end,
-                                true,
-                            ) =>
+                            if content_range_total(&r) == expected_total
+                                && valid_progressive_range_response(
+                                    &r,
+                                    chunk_start,
+                                    chunk_end,
+                                    true,
+                                ) =>
                         {
                             current = Some(r);
                             next_pos = chunk_end.checked_add(1);
@@ -1725,6 +1737,14 @@ async fn stream_head(
 }
 
 /// Extract the total size from a Content-Range header ("bytes 0-99/1234").
+fn content_range_total(response: &reqwest::Response) -> Option<u64> {
+    response
+        .headers()
+        .get(header::CONTENT_RANGE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(parse_content_range_total)
+}
+
 fn parse_content_range_total(value: &str) -> Option<u64> {
     value.rsplit('/').next()?.trim().parse::<u64>().ok()
 }
@@ -3192,6 +3212,23 @@ mod tests {
 
     #[tokio::test]
     async fn relay_heals_a_mid_range_strategy_cutoff_in_place() {
+        let (status, body_len, demoted) = relay_across_cutoff(4 * PROXY_CHUNK).await;
+        assert_eq!(status, StatusCode::PARTIAL_CONTENT);
+        assert_eq!(body_len, Some(3 * PROXY_CHUNK));
+        assert_eq!(demoted, vec!["legacy-android-vr"]);
+    }
+
+    #[tokio::test]
+    async fn relay_does_not_splice_a_different_file_after_re_resolve() {
+        let (status, body_len, _) = relay_across_cutoff(5 * PROXY_CHUNK).await;
+        assert_eq!(status, StatusCode::PARTIAL_CONTENT);
+        // The body ends early (an error) rather than mixing two encodings.
+        assert_eq!(body_len, None);
+    }
+
+    /// Requests 3 MiB through a strategy whose URL 403s from 2 MiB on; the
+    /// re-resolved URL reports `good_total` bytes.
+    async fn relay_across_cutoff(good_total: u64) -> (StatusCode, Option<u64>, Vec<&'static str>) {
         let _env_guard = YTDLP_ENV_LOCK.lock().unwrap();
         const TOTAL: u64 = 4 * PROXY_CHUNK;
         let app = Router::new()
@@ -3214,7 +3251,7 @@ mod tests {
             )
             .route(
                 "/good",
-                get(|headers: HeaderMap| async move { range_response(&headers, TOTAL) }),
+                get(move |headers: HeaderMap| async move { range_response(&headers, good_total) }),
             );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
@@ -3268,12 +3305,8 @@ mod tests {
         }
         std::fs::remove_file(&fake_ytdlp).unwrap();
 
-        assert_eq!(status, StatusCode::PARTIAL_CONTENT);
-        assert_eq!(body.unwrap().len() as u64, wanted);
-        assert_eq!(
-            active_demoted_sources(&state, source_url).await,
-            vec!["legacy-android-vr"]
-        );
+        let demoted = active_demoted_sources(&state, source_url).await;
+        (status, body.ok().map(|bytes| bytes.len() as u64), demoted)
     }
 
     #[tokio::test]
