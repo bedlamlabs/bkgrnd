@@ -53,7 +53,7 @@ struct AppState {
     // Which resolver strategy produced each cached stream URL, and strategies
     // temporarily skipped because their URLs were rejected mid-stream.
     stream_sources: Arc<Mutex<HashMap<String, &'static str>>>,
-    demoted_sources: Arc<Mutex<HashMap<&'static str, Instant>>>,
+    demoted_sources: Arc<Mutex<HashMap<(String, &'static str), Instant>>>,
     search_cache: Arc<Mutex<HashMap<String, (Instant, Vec<SearchResult>)>>>,
     ytdlp_sem: Arc<Semaphore>,
     local_status: Arc<Mutex<Option<LocalStatusRecord>>>,
@@ -2118,33 +2118,39 @@ async fn probe_direct_stream_url(state: &AppState, direct_url: &str) -> bool {
     )
 }
 
-/// How long a strategy is skipped after one of its URLs is rejected mid-stream.
+/// How long a strategy is skipped for a video after one of its URLs for that
+/// video is rejected mid-stream.
 const SOURCE_DEMOTION_TTL: Duration = Duration::from_secs(10 * 60);
 
-async fn active_demoted_sources(state: &AppState) -> Vec<&'static str> {
+async fn active_demoted_sources(state: &AppState, source_url: &str) -> Vec<&'static str> {
     let mut demoted = state.demoted_sources.lock().await;
     let now = Instant::now();
     demoted.retain(|_, until| *until > now);
-    demoted.keys().copied().collect()
+    demoted
+        .keys()
+        .filter(|(url, _)| url == source_url)
+        .map(|(_, source)| *source)
+        .collect()
 }
 
 /// A cached URL is evicted ~5 minutes before YouTube's own expiry, so a 403 on
 /// one means the strategy that produced it hands out URLs YouTube cuts off
 /// partway (android_vr without a PO token stops after ~2 MiB). Skip that
-/// strategy for a while so the re-resolve falls through to the next one.
+/// strategy for this video for a while so the re-resolve falls through to the
+/// next one. Scoped per video so one gated or quirky video cannot push every
+/// other stream off the preferred strategy.
 async fn demote_stream_source(state: &AppState, source_url: &str) {
     let Some(source) = state.stream_sources.lock().await.remove(source_url) else {
         return;
     };
     warn!(
-        "demoting resolver strategy {source} for {}s after mid-stream rejection",
+        "demoting resolver strategy {source} for {source_url} for {}s after mid-stream rejection",
         SOURCE_DEMOTION_TTL.as_secs()
     );
-    state
-        .demoted_sources
-        .lock()
-        .await
-        .insert(source, Instant::now() + SOURCE_DEMOTION_TTL);
+    state.demoted_sources.lock().await.insert(
+        (source_url.to_string(), source),
+        Instant::now() + SOURCE_DEMOTION_TTL,
+    );
 }
 
 async fn resolve_direct_url(
@@ -2160,7 +2166,7 @@ async fn resolve_direct_url(
 
     let _permit = state.ytdlp_sem.acquire().await;
 
-    let demoted = active_demoted_sources(state).await;
+    let demoted = active_demoted_sources(state, url).await;
     let strategies = resolver_strategy_specs();
     // If every strategy is demoted, try them all rather than fail outright.
     let skip_demoted = strategies.iter().any(|s| !demoted.contains(&s.source));
@@ -3143,7 +3149,9 @@ mod tests {
             .unwrap()
             .url
             .clone();
-        let demoted = active_demoted_sources(&state).await;
+        let demoted = active_demoted_sources(&state, source_url).await;
+        let other_video_demoted =
+            active_demoted_sources(&state, "https://www.youtube.com/watch?v=other").await;
 
         match previous_ytdlp {
             Some(value) => std::env::set_var("WOPR_YTDLP_BIN", value),
@@ -3155,6 +3163,57 @@ mod tests {
         assert_eq!(later, StatusCode::PARTIAL_CONTENT);
         assert_eq!(cached_url, format!("http://{address}/good"));
         assert_eq!(demoted, vec!["legacy-android-vr"]);
+        assert!(other_video_demoted.is_empty());
+    }
+
+    #[tokio::test]
+    async fn resolver_tries_every_strategy_when_all_are_demoted() {
+        let _env_guard = YTDLP_ENV_LOCK.lock().unwrap();
+        let app = Router::new().route(
+            "/good",
+            get(|headers: HeaderMap| async move { range_response(&headers, 4 * PROXY_CHUNK) }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let fake_ytdlp = std::env::temp_dir().join(format!(
+            "bkgrnd-all-demoted-ytdlp-{}-{unique}",
+            std::process::id()
+        ));
+        std::fs::write(
+            &fake_ytdlp,
+            format!("#!/bin/sh\nprintf '%s\\n' 'http://{address}/good'\n"),
+        )
+        .unwrap();
+        std::fs::set_permissions(&fake_ytdlp, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let previous_ytdlp = std::env::var_os("WOPR_YTDLP_BIN");
+        std::env::set_var("WOPR_YTDLP_BIN", &fake_ytdlp);
+
+        let state = test_state(reqwest::Client::new());
+        let source_url = "https://www.youtube.com/watch?v=all-demoted";
+        {
+            let mut demoted = state.demoted_sources.lock().await;
+            for strategy in resolver_strategy_specs() {
+                demoted.insert(
+                    (source_url.to_string(), strategy.source),
+                    Instant::now() + SOURCE_DEMOTION_TTL,
+                );
+            }
+        }
+        let resolved = resolve_direct_url(&state, source_url).await;
+
+        match previous_ytdlp {
+            Some(value) => std::env::set_var("WOPR_YTDLP_BIN", value),
+            None => std::env::remove_var("WOPR_YTDLP_BIN"),
+        }
+        std::fs::remove_file(&fake_ytdlp).unwrap();
+
+        assert_eq!(resolved.unwrap().source, "pot-provider");
     }
 
     #[tokio::test]
