@@ -1290,7 +1290,9 @@ async fn stream_audio(
                 "upstream returned {} for cached stream url; re-resolving and retrying",
                 r.status()
             );
-            demote_stream_source(&state, &q.url).await;
+            if r.status() == StatusCode::FORBIDDEN {
+                demote_stream_source(&state, &q.url).await;
+            }
             evict_stream_cache(&state, &q.url).await;
             direct_url = match resolve_stream_url(&state, &q.url).await {
                 Ok(refreshed) => refreshed.url,
@@ -1321,7 +1323,6 @@ async fn stream_audio(
                         "upstream returned {} after stream URL refresh; evicting cache entry",
                         retry.status()
                     );
-                    demote_stream_source(&state, &q.url).await;
                     evict_stream_cache(&state, &q.url).await;
                     return StatusCode::BAD_GATEWAY.into_response();
                 }
@@ -1769,10 +1770,12 @@ fn progressive_response_span(response: &reqwest::Response) -> Option<u64> {
 
 async fn evict_stream_cache(state: &AppState, url: &str) {
     state.stream_cache.lock().await.remove(url);
+    state.stream_sources.lock().await.remove(url);
 }
 
 async fn clear_stream_resolution_cache(state: &AppState, url: &str) {
     state.stream_cache.lock().await.remove(url);
+    state.stream_sources.lock().await.remove(url);
     state.stream_failures.lock().await.remove(url);
 }
 
@@ -1931,6 +1934,11 @@ async fn resolve_stream_url(
     // entries forever.
     let now = Instant::now();
     cache.retain(|_, entry| entry.expires_at > now);
+    state
+        .stream_sources
+        .lock()
+        .await
+        .retain(|key, _| cache.contains_key(key));
     cache.insert(
         url.to_string(),
         CachedStreamUrl {
@@ -2111,7 +2119,7 @@ async fn probe_direct_stream_url(state: &AppState, direct_url: &str) -> bool {
 }
 
 /// How long a strategy is skipped after one of its URLs is rejected mid-stream.
-const SOURCE_DEMOTION_TTL: Duration = Duration::from_secs(30 * 60);
+const SOURCE_DEMOTION_TTL: Duration = Duration::from_secs(10 * 60);
 
 async fn active_demoted_sources(state: &AppState) -> Vec<&'static str> {
     let mut demoted = state.demoted_sources.lock().await;
