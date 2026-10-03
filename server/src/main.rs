@@ -50,6 +50,10 @@ struct AppState {
     stream_cache: Arc<Mutex<HashMap<String, CachedStreamUrl>>>,
     stream_failures: Arc<Mutex<HashMap<String, CachedStreamFailure>>>,
     stream_resolves: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
+    // Which resolver strategy produced each cached stream URL, and strategies
+    // temporarily skipped because their URLs were rejected mid-stream.
+    stream_sources: Arc<Mutex<HashMap<String, &'static str>>>,
+    demoted_sources: Arc<Mutex<HashMap<&'static str, Instant>>>,
     search_cache: Arc<Mutex<HashMap<String, (Instant, Vec<SearchResult>)>>>,
     ytdlp_sem: Arc<Semaphore>,
     local_status: Arc<Mutex<Option<LocalStatusRecord>>>,
@@ -1286,6 +1290,7 @@ async fn stream_audio(
                 "upstream returned {} for cached stream url; re-resolving and retrying",
                 r.status()
             );
+            demote_stream_source(&state, &q.url).await;
             evict_stream_cache(&state, &q.url).await;
             direct_url = match resolve_stream_url(&state, &q.url).await {
                 Ok(refreshed) => refreshed.url,
@@ -1316,6 +1321,7 @@ async fn stream_audio(
                         "upstream returned {} after stream URL refresh; evicting cache entry",
                         retry.status()
                     );
+                    demote_stream_source(&state, &q.url).await;
                     evict_stream_cache(&state, &q.url).await;
                     return StatusCode::BAD_GATEWAY.into_response();
                 }
@@ -1863,10 +1869,12 @@ async fn resolve_stream_url(
 
     let start = Instant::now();
     let mut resolved_source = "yt-dlp".to_string();
+    let mut strategy_source = None;
     let resolve_result: Result<String, StreamResolveError> =
         match resolve_direct_url(state, url).await {
             Ok(resolved) => {
                 resolved_source = resolved.source.to_string();
+                strategy_source = Some(resolved.source);
                 Ok(resolved.url)
             }
             Err(e) if e.terminal => {
@@ -1931,6 +1939,13 @@ async fn resolve_stream_url(
         },
     );
     drop(cache);
+    {
+        let mut sources = state.stream_sources.lock().await;
+        match strategy_source {
+            Some(source) => sources.insert(url.to_string(), source),
+            None => sources.remove(url),
+        };
+    }
 
     Ok(ResolvedStream {
         url: resolved,
@@ -2040,23 +2055,54 @@ async fn probe_direct_stream_url(state: &AppState, direct_url: &str) -> bool {
         );
     }
 
+    let probe_end = PROXY_CHUNK - 1;
     let probe = async {
-        let probe_end = PROXY_CHUNK - 1;
-        let Some(total) = probe_progressive_range(state, direct_url, 0, probe_end).await else {
+        let Ok(response) = state
+            .http
+            .get(direct_url)
+            .header(header::RANGE, format!("bytes=0-{probe_end}"))
+            .send()
+            .await
+        else {
             return false;
         };
-        // Some clients (notably android_vr without a PO token) serve the first
-        // chunk and then 403 every later range, so a first-chunk-only probe
-        // accepts a URL that stalls a couple of MiB into playback. Confirm a
-        // range past that point too, so the resolver falls through instead.
-        let Some(later_start) = total.and_then(later_probe_start) else {
-            return true;
+        if !valid_progressive_range_response(&response, 0, probe_end, false) {
+            return false;
+        }
+        let Some((_, actual_end, total)) = response
+            .headers()
+            .get(header::CONTENT_RANGE)
+            .and_then(|value| value.to_str().ok())
+            .and_then(parse_content_range)
+        else {
+            return false;
         };
-        let total = total.unwrap_or_default();
-        let later_end = (later_start + LATER_PROBE_LEN - 1).min(total - 1);
-        probe_progressive_range(state, direct_url, later_start, later_end)
-            .await
-            .is_some()
+        // A shorter response is valid only when Content-Range proves that it
+        // reached EOF (for genuinely small media); otherwise it is the same
+        // truncated first chunk that causes playback to fail.
+        if actual_end != probe_end && total != actual_end.checked_add(1) {
+            return false;
+        }
+        let Some(response_span) = progressive_response_span(&response) else {
+            return false;
+        };
+
+        use futures_util::StreamExt;
+        let mut received = 0_u64;
+        let mut body = Box::pin(capped_response_stream(response, response_span));
+        while let Some(item) = body.next().await {
+            let Ok(bytes) = item else {
+                return false;
+            };
+            let Ok(length) = u64::try_from(bytes.len()) else {
+                return false;
+            };
+            let Some(next) = received.checked_add(length) else {
+                return false;
+            };
+            received = next;
+        }
+        received == response_span
     };
     matches!(
         timeout(YTDLP_CANDIDATE_PROBE_TIMEOUT, probe).await,
@@ -2064,59 +2110,33 @@ async fn probe_direct_stream_url(state: &AppState, direct_url: &str) -> bool {
     )
 }
 
-const LATER_PROBE_LEN: u64 = 64 * 1024;
+/// How long a strategy is skipped after one of its URLs is rejected mid-stream.
+const SOURCE_DEMOTION_TTL: Duration = Duration::from_secs(30 * 60);
 
-/// Start of the second candidate probe: a range beyond the first two chunks,
-/// clamped to the media size. None when the media fits in the first chunk.
-fn later_probe_start(total: u64) -> Option<u64> {
-    if total <= PROXY_CHUNK {
-        return None;
-    }
-    Some(
-        (PROXY_CHUNK * 2)
-            .min(total.saturating_sub(LATER_PROBE_LEN))
-            .max(PROXY_CHUNK),
-    )
+async fn active_demoted_sources(state: &AppState) -> Vec<&'static str> {
+    let mut demoted = state.demoted_sources.lock().await;
+    let now = Instant::now();
+    demoted.retain(|_, until| *until > now);
+    demoted.keys().copied().collect()
 }
 
-/// Fetch `start..=end` and confirm an exact 206 with the full body. On success
-/// returns the total media size from Content-Range (None when it is `*`).
-async fn probe_progressive_range(
-    state: &AppState,
-    direct_url: &str,
-    start: u64,
-    end: u64,
-) -> Option<Option<u64>> {
-    let response = state
-        .http
-        .get(direct_url)
-        .header(header::RANGE, format!("bytes={start}-{end}"))
-        .send()
+/// A cached URL is evicted ~5 minutes before YouTube's own expiry, so a 403 on
+/// one means the strategy that produced it hands out URLs YouTube cuts off
+/// partway (android_vr without a PO token stops after ~2 MiB). Skip that
+/// strategy for a while so the re-resolve falls through to the next one.
+async fn demote_stream_source(state: &AppState, source_url: &str) {
+    let Some(source) = state.stream_sources.lock().await.remove(source_url) else {
+        return;
+    };
+    warn!(
+        "demoting resolver strategy {source} for {}s after mid-stream rejection",
+        SOURCE_DEMOTION_TTL.as_secs()
+    );
+    state
+        .demoted_sources
+        .lock()
         .await
-        .ok()?;
-    if !valid_progressive_range_response(&response, start, end, false) {
-        return None;
-    }
-    let (_, actual_end, total) = response
-        .headers()
-        .get(header::CONTENT_RANGE)
-        .and_then(|value| value.to_str().ok())
-        .and_then(parse_content_range)?;
-    // A shorter response is valid only when Content-Range proves that it
-    // reached EOF (for genuinely small media); otherwise it is the same
-    // truncated chunk that causes playback to fail.
-    if actual_end != end && total != actual_end.checked_add(1) {
-        return None;
-    }
-    let response_span = progressive_response_span(&response)?;
-
-    use futures_util::StreamExt;
-    let mut received = 0_u64;
-    let mut body = Box::pin(capped_response_stream(response, response_span));
-    while let Some(item) = body.next().await {
-        received = received.checked_add(u64::try_from(item.ok()?.len()).ok()?)?;
-    }
-    (received == response_span).then_some(total)
+        .insert(source, Instant::now() + SOURCE_DEMOTION_TTL);
 }
 
 async fn resolve_direct_url(
@@ -2132,8 +2152,16 @@ async fn resolve_direct_url(
 
     let _permit = state.ytdlp_sem.acquire().await;
 
+    let demoted = active_demoted_sources(state).await;
+    let strategies = resolver_strategy_specs();
+    // If every strategy is demoted, try them all rather than fail outright.
+    let skip_demoted = strategies.iter().any(|s| !demoted.contains(&s.source));
+
     let mut last_error: Option<StreamResolveError> = None;
-    for strategy in resolver_strategy_specs() {
+    for strategy in strategies {
+        if skip_demoted && demoted.contains(&strategy.source) {
+            continue;
+        }
         let mut cmd = ytdlp_command();
         cmd.args(["-f", format, "--get-url", "--no-playlist"]);
         if strategy.source == "pot-provider" {
@@ -2734,6 +2762,8 @@ async fn main() -> anyhow::Result<()> {
         stream_cache: Arc::new(Mutex::new(HashMap::new())),
         stream_failures: Arc::new(Mutex::new(HashMap::new())),
         stream_resolves: Arc::new(Mutex::new(HashMap::new())),
+        stream_sources: Arc::new(Mutex::new(HashMap::new())),
+        demoted_sources: Arc::new(Mutex::new(HashMap::new())),
         search_cache: Arc::new(Mutex::new(HashMap::new())),
         ytdlp_sem: Arc::new(Semaphore::new(YTDLP_MAX_CONCURRENCY)),
         local_status: Arc::new(Mutex::new(None)),
@@ -2823,6 +2853,8 @@ mod tests {
             stream_cache: Arc::new(Mutex::new(HashMap::new())),
             stream_failures: Arc::new(Mutex::new(HashMap::new())),
             stream_resolves: Arc::new(Mutex::new(HashMap::new())),
+            stream_sources: Arc::new(Mutex::new(HashMap::new())),
+            demoted_sources: Arc::new(Mutex::new(HashMap::new())),
             search_cache: Arc::new(Mutex::new(HashMap::new())),
             ytdlp_sem: Arc::new(Semaphore::new(1)),
             local_status: Arc::new(Mutex::new(None)),
@@ -3003,6 +3035,118 @@ mod tests {
             state.stream_cache.lock().await.get(source_url).unwrap().url,
             format!("http://{address}/fresh")
         );
+    }
+
+    fn range_response(headers: &HeaderMap, total: u64) -> Response<Body> {
+        let value = headers[header::RANGE].to_str().unwrap();
+        let (start, end) = value
+            .strip_prefix("bytes=")
+            .unwrap()
+            .split_once('-')
+            .unwrap();
+        let start: u64 = start.parse().unwrap();
+        let end = end.parse::<u64>().unwrap_or(total - 1).min(total - 1);
+        Response::builder()
+            .status(StatusCode::PARTIAL_CONTENT)
+            .header(
+                header::CONTENT_RANGE,
+                format!("bytes {start}-{end}/{total}"),
+            )
+            .body(Body::from(vec![b'a'; (end - start + 1) as usize]))
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn mid_stream_rejection_demotes_the_strategy_that_produced_the_url() {
+        let _env_guard = YTDLP_ENV_LOCK.lock().unwrap();
+        const TOTAL: u64 = 4 * PROXY_CHUNK;
+        // android_vr URLs serve the first chunk, then YouTube 403s later ranges.
+        let app = Router::new()
+            .route(
+                "/capped",
+                get(|headers: HeaderMap| async move {
+                    if headers[header::RANGE]
+                        .to_str()
+                        .unwrap()
+                        .starts_with("bytes=0-")
+                    {
+                        range_response(&headers, TOTAL)
+                    } else {
+                        StatusCode::FORBIDDEN.into_response()
+                    }
+                }),
+            )
+            .route(
+                "/good",
+                get(|headers: HeaderMap| async move { range_response(&headers, TOTAL) }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let fake_ytdlp = std::env::temp_dir().join(format!(
+            "bkgrnd-demote-ytdlp-{}-{unique}",
+            std::process::id()
+        ));
+        std::fs::write(
+            &fake_ytdlp,
+            format!(
+                "#!/bin/sh\ncase \"$*\" in\n  *player_client=android_vr*) printf '%s\\n' 'http://{address}/capped' ;;\n  *player_client=*) exit 1 ;;\n  *) printf '%s\\n' 'http://{address}/good' ;;\nesac\n"
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&fake_ytdlp, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let previous_ytdlp = std::env::var_os("WOPR_YTDLP_BIN");
+        std::env::set_var("WOPR_YTDLP_BIN", &fake_ytdlp);
+
+        let state = test_state(reqwest::Client::new());
+        let source_url = "https://www.youtube.com/watch?v=demote-source";
+        let fetch = |range: &'static str| {
+            let state = state.clone();
+            async move {
+                let mut headers = HeaderMap::new();
+                headers.insert(header::RANGE, HeaderValue::from_static(range));
+                stream_audio(
+                    State(state),
+                    headers,
+                    Query(StreamQuery {
+                        url: source_url.to_string(),
+                        token: None,
+                        proxy: Some(true),
+                        castsig: None,
+                    }),
+                )
+                .await
+                .into_response()
+                .status()
+            }
+        };
+        let first = fetch("bytes=0-1023").await;
+        let later = fetch("bytes=2097152-2098175").await;
+        let cached_url = state
+            .stream_cache
+            .lock()
+            .await
+            .get(source_url)
+            .unwrap()
+            .url
+            .clone();
+        let demoted = active_demoted_sources(&state).await;
+
+        match previous_ytdlp {
+            Some(value) => std::env::set_var("WOPR_YTDLP_BIN", value),
+            None => std::env::remove_var("WOPR_YTDLP_BIN"),
+        }
+        std::fs::remove_file(&fake_ytdlp).unwrap();
+
+        assert_eq!(first, StatusCode::PARTIAL_CONTENT);
+        assert_eq!(later, StatusCode::PARTIAL_CONTENT);
+        assert_eq!(cached_url, format!("http://{address}/good"));
+        assert_eq!(demoted, vec!["legacy-android-vr"]);
     }
 
     #[tokio::test]
@@ -3385,16 +3529,20 @@ mod tests {
                                 .lock()
                                 .unwrap()
                                 .push(format!("embedded:{range}"));
-                            let first = format!("bytes=0-{}", PROXY_CHUNK - 1);
-                            let later = format!(
-                                "bytes={}-{}",
-                                2 * PROXY_CHUNK,
-                                2 * PROXY_CHUNK + LATER_PROBE_LEN - 1
-                            );
-                            if range != first && range != later {
+                            let expected = format!("bytes=0-{}", PROXY_CHUNK - 1);
+                            if range != expected {
                                 return StatusCode::BAD_GATEWAY.into_response();
                             }
-                            serve_range(&headers, 4_194_304).into_response()
+                            Response::builder()
+                                .status(StatusCode::PARTIAL_CONTENT)
+                                .header(header::CONTENT_LENGTH, PROXY_CHUNK.to_string())
+                                .header(
+                                    header::CONTENT_RANGE,
+                                    format!("bytes 0-{}/2097152", PROXY_CHUNK - 1),
+                                )
+                                .body(Body::from(vec![b'a'; PROXY_CHUNK as usize]))
+                                .unwrap()
+                                .into_response()
                         }
                     }
                 }),
@@ -3463,45 +3611,9 @@ mod tests {
             probed_ranges.lock().unwrap().as_slice(),
             &[
                 format!("pot:{full_probe}"),
-                format!("embedded:{full_probe}"),
-                format!(
-                    "embedded:bytes={}-{}",
-                    2 * PROXY_CHUNK,
-                    2 * PROXY_CHUNK + LATER_PROBE_LEN - 1
-                )
+                format!("embedded:{full_probe}")
             ]
         );
-    }
-
-    fn requested_range(headers: &HeaderMap) -> (u64, u64) {
-        let value = headers[header::RANGE].to_str().unwrap();
-        let (start, end) = value
-            .strip_prefix("bytes=")
-            .unwrap()
-            .split_once('-')
-            .unwrap();
-        (start.parse().unwrap(), end.parse().unwrap())
-    }
-
-    fn serve_range(headers: &HeaderMap, total: u64) -> Response<Body> {
-        let (start, end) = requested_range(headers);
-        let end = end.min(total - 1);
-        Response::builder()
-            .status(StatusCode::PARTIAL_CONTENT)
-            .header(
-                header::CONTENT_RANGE,
-                format!("bytes {start}-{end}/{total}"),
-            )
-            .body(Body::from(vec![0_u8; (end - start + 1) as usize]))
-            .unwrap()
-    }
-
-    #[test]
-    fn later_probe_start_targets_past_the_first_chunks() {
-        assert_eq!(later_probe_start(PROXY_CHUNK), None);
-        assert_eq!(later_probe_start(4 * PROXY_CHUNK), Some(2 * PROXY_CHUNK));
-        let small = PROXY_CHUNK + 10;
-        assert_eq!(later_probe_start(small), Some(PROXY_CHUNK));
     }
 
     #[tokio::test]
@@ -3510,19 +3622,16 @@ mod tests {
         let app = Router::new()
             .route(
                 "/ok",
-                get(|headers: HeaderMap| async move { serve_range(&headers, 4_194_304) }),
-            )
-            .route(
-                "/later-403",
-                get(|headers: HeaderMap| async move {
-                    if requested_range(&headers).0 == 0 {
-                        serve_range(&headers, 4_194_304)
-                    } else {
-                        Response::builder()
-                            .status(StatusCode::FORBIDDEN)
-                            .body(Body::empty())
-                            .unwrap()
-                    }
+                get(move || async move {
+                    Response::builder()
+                        .status(StatusCode::PARTIAL_CONTENT)
+                        .header(header::CONTENT_LENGTH, PROXY_CHUNK.to_string())
+                        .header(
+                            header::CONTENT_RANGE,
+                            format!("bytes 0-{probe_end}/2097152"),
+                        )
+                        .body(Body::from(vec![0_u8; PROXY_CHUNK as usize]))
+                        .unwrap()
                 }),
             )
             .route(
@@ -3577,7 +3686,7 @@ mod tests {
 
         assert!(probe_direct_stream_url(&state, &format!("http://{address}/ok")).await);
         assert!(probe_direct_stream_url(&state, &format!("http://{address}/small-file")).await);
-        for path in ["ignored-range", "wrong-range", "short-body", "later-403"] {
+        for path in ["ignored-range", "wrong-range", "short-body"] {
             assert!(
                 !probe_direct_stream_url(&state, &format!("http://{address}/{path}")).await,
                 "{path} must not pass progressive candidate validation"
