@@ -2040,59 +2040,83 @@ async fn probe_direct_stream_url(state: &AppState, direct_url: &str) -> bool {
         );
     }
 
-    let probe_end = PROXY_CHUNK - 1;
     let probe = async {
-        let Ok(response) = state
-            .http
-            .get(direct_url)
-            .header(header::RANGE, format!("bytes=0-{probe_end}"))
-            .send()
+        let probe_end = PROXY_CHUNK - 1;
+        let Some(total) = probe_progressive_range(state, direct_url, 0, probe_end).await else {
+            return false;
+        };
+        // Some clients (notably android_vr without a PO token) serve the first
+        // chunk and then 403 every later range, so a first-chunk-only probe
+        // accepts a URL that stalls a couple of MiB into playback. Confirm a
+        // range past that point too, so the resolver falls through instead.
+        let Some(later_start) = total.and_then(later_probe_start) else {
+            return true;
+        };
+        let total = total.unwrap_or_default();
+        let later_end = (later_start + LATER_PROBE_LEN - 1).min(total - 1);
+        probe_progressive_range(state, direct_url, later_start, later_end)
             .await
-        else {
-            return false;
-        };
-        if !valid_progressive_range_response(&response, 0, probe_end, false) {
-            return false;
-        }
-        let Some((_, actual_end, total)) = response
-            .headers()
-            .get(header::CONTENT_RANGE)
-            .and_then(|value| value.to_str().ok())
-            .and_then(parse_content_range)
-        else {
-            return false;
-        };
-        // A shorter response is valid only when Content-Range proves that it
-        // reached EOF (for genuinely small media); otherwise it is the same
-        // truncated first chunk that causes playback to fail.
-        if actual_end != probe_end && total != actual_end.checked_add(1) {
-            return false;
-        }
-        let Some(response_span) = progressive_response_span(&response) else {
-            return false;
-        };
-
-        use futures_util::StreamExt;
-        let mut received = 0_u64;
-        let mut body = Box::pin(capped_response_stream(response, response_span));
-        while let Some(item) = body.next().await {
-            let Ok(bytes) = item else {
-                return false;
-            };
-            let Ok(length) = u64::try_from(bytes.len()) else {
-                return false;
-            };
-            let Some(next) = received.checked_add(length) else {
-                return false;
-            };
-            received = next;
-        }
-        received == response_span
+            .is_some()
     };
     matches!(
         timeout(YTDLP_CANDIDATE_PROBE_TIMEOUT, probe).await,
         Ok(true)
     )
+}
+
+const LATER_PROBE_LEN: u64 = 64 * 1024;
+
+/// Start of the second candidate probe: a range beyond the first two chunks,
+/// clamped to the media size. None when the media fits in the first chunk.
+fn later_probe_start(total: u64) -> Option<u64> {
+    if total <= PROXY_CHUNK {
+        return None;
+    }
+    Some(
+        (PROXY_CHUNK * 2)
+            .min(total.saturating_sub(LATER_PROBE_LEN))
+            .max(PROXY_CHUNK),
+    )
+}
+
+/// Fetch `start..=end` and confirm an exact 206 with the full body. On success
+/// returns the total media size from Content-Range (None when it is `*`).
+async fn probe_progressive_range(
+    state: &AppState,
+    direct_url: &str,
+    start: u64,
+    end: u64,
+) -> Option<Option<u64>> {
+    let response = state
+        .http
+        .get(direct_url)
+        .header(header::RANGE, format!("bytes={start}-{end}"))
+        .send()
+        .await
+        .ok()?;
+    if !valid_progressive_range_response(&response, start, end, false) {
+        return None;
+    }
+    let (_, actual_end, total) = response
+        .headers()
+        .get(header::CONTENT_RANGE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(parse_content_range)?;
+    // A shorter response is valid only when Content-Range proves that it
+    // reached EOF (for genuinely small media); otherwise it is the same
+    // truncated chunk that causes playback to fail.
+    if actual_end != end && total != actual_end.checked_add(1) {
+        return None;
+    }
+    let response_span = progressive_response_span(&response)?;
+
+    use futures_util::StreamExt;
+    let mut received = 0_u64;
+    let mut body = Box::pin(capped_response_stream(response, response_span));
+    while let Some(item) = body.next().await {
+        received = received.checked_add(u64::try_from(item.ok()?.len()).ok()?)?;
+    }
+    (received == response_span).then_some(total)
 }
 
 async fn resolve_direct_url(
@@ -3361,20 +3385,16 @@ mod tests {
                                 .lock()
                                 .unwrap()
                                 .push(format!("embedded:{range}"));
-                            let expected = format!("bytes=0-{}", PROXY_CHUNK - 1);
-                            if range != expected {
+                            let first = format!("bytes=0-{}", PROXY_CHUNK - 1);
+                            let later = format!(
+                                "bytes={}-{}",
+                                2 * PROXY_CHUNK,
+                                2 * PROXY_CHUNK + LATER_PROBE_LEN - 1
+                            );
+                            if range != first && range != later {
                                 return StatusCode::BAD_GATEWAY.into_response();
                             }
-                            Response::builder()
-                                .status(StatusCode::PARTIAL_CONTENT)
-                                .header(header::CONTENT_LENGTH, PROXY_CHUNK.to_string())
-                                .header(
-                                    header::CONTENT_RANGE,
-                                    format!("bytes 0-{}/2097152", PROXY_CHUNK - 1),
-                                )
-                                .body(Body::from(vec![b'a'; PROXY_CHUNK as usize]))
-                                .unwrap()
-                                .into_response()
+                            serve_range(&headers, 4_194_304).into_response()
                         }
                     }
                 }),
@@ -3443,9 +3463,45 @@ mod tests {
             probed_ranges.lock().unwrap().as_slice(),
             &[
                 format!("pot:{full_probe}"),
-                format!("embedded:{full_probe}")
+                format!("embedded:{full_probe}"),
+                format!(
+                    "embedded:bytes={}-{}",
+                    2 * PROXY_CHUNK,
+                    2 * PROXY_CHUNK + LATER_PROBE_LEN - 1
+                )
             ]
         );
+    }
+
+    fn requested_range(headers: &HeaderMap) -> (u64, u64) {
+        let value = headers[header::RANGE].to_str().unwrap();
+        let (start, end) = value
+            .strip_prefix("bytes=")
+            .unwrap()
+            .split_once('-')
+            .unwrap();
+        (start.parse().unwrap(), end.parse().unwrap())
+    }
+
+    fn serve_range(headers: &HeaderMap, total: u64) -> Response<Body> {
+        let (start, end) = requested_range(headers);
+        let end = end.min(total - 1);
+        Response::builder()
+            .status(StatusCode::PARTIAL_CONTENT)
+            .header(
+                header::CONTENT_RANGE,
+                format!("bytes {start}-{end}/{total}"),
+            )
+            .body(Body::from(vec![0_u8; (end - start + 1) as usize]))
+            .unwrap()
+    }
+
+    #[test]
+    fn later_probe_start_targets_past_the_first_chunks() {
+        assert_eq!(later_probe_start(PROXY_CHUNK), None);
+        assert_eq!(later_probe_start(4 * PROXY_CHUNK), Some(2 * PROXY_CHUNK));
+        let small = PROXY_CHUNK + 10;
+        assert_eq!(later_probe_start(small), Some(PROXY_CHUNK));
     }
 
     #[tokio::test]
@@ -3454,16 +3510,19 @@ mod tests {
         let app = Router::new()
             .route(
                 "/ok",
-                get(move || async move {
-                    Response::builder()
-                        .status(StatusCode::PARTIAL_CONTENT)
-                        .header(header::CONTENT_LENGTH, PROXY_CHUNK.to_string())
-                        .header(
-                            header::CONTENT_RANGE,
-                            format!("bytes 0-{probe_end}/2097152"),
-                        )
-                        .body(Body::from(vec![0_u8; PROXY_CHUNK as usize]))
-                        .unwrap()
+                get(|headers: HeaderMap| async move { serve_range(&headers, 4_194_304) }),
+            )
+            .route(
+                "/later-403",
+                get(|headers: HeaderMap| async move {
+                    if requested_range(&headers).0 == 0 {
+                        serve_range(&headers, 4_194_304)
+                    } else {
+                        Response::builder()
+                            .status(StatusCode::FORBIDDEN)
+                            .body(Body::empty())
+                            .unwrap()
+                    }
                 }),
             )
             .route(
@@ -3518,7 +3577,7 @@ mod tests {
 
         assert!(probe_direct_stream_url(&state, &format!("http://{address}/ok")).await);
         assert!(probe_direct_stream_url(&state, &format!("http://{address}/small-file")).await);
-        for path in ["ignored-range", "wrong-range", "short-body"] {
+        for path in ["ignored-range", "wrong-range", "short-body", "later-403"] {
             assert!(
                 !probe_direct_stream_url(&state, &format!("http://{address}/{path}")).await,
                 "{path} must not pass progressive candidate validation"
