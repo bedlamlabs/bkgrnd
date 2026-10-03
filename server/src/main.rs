@@ -2181,16 +2181,14 @@ async fn resolve_direct_url(
 
     let _permit = state.ytdlp_sem.acquire().await;
 
+    // Strategies demoted for this video are tried last rather than skipped,
+    // so a transient failure elsewhere can still fall back to them.
     let demoted = active_demoted_sources(state, url).await;
-    let strategies = resolver_strategy_specs();
-    // If every strategy is demoted, try them all rather than fail outright.
-    let skip_demoted = strategies.iter().any(|s| !demoted.contains(&s.source));
+    let mut strategies = resolver_strategy_specs();
+    strategies.sort_by_key(|strategy| demoted.contains(&strategy.source));
 
     let mut last_error: Option<StreamResolveError> = None;
     for strategy in strategies {
-        if skip_demoted && demoted.contains(&strategy.source) {
-            continue;
-        }
         let mut cmd = ytdlp_command();
         cmd.args(["-f", format, "--get-url", "--no-playlist"]);
         if strategy.source == "pot-provider" {
