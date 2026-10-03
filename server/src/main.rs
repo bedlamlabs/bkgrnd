@@ -52,7 +52,7 @@ struct AppState {
     stream_resolves: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
     // Which resolver strategy produced each cached stream URL, and strategies
     // temporarily skipped because their URLs were rejected mid-stream.
-    stream_sources: Arc<Mutex<HashMap<String, &'static str>>>,
+    stream_sources: Arc<Mutex<HashMap<String, (String, &'static str)>>>,
     demoted_sources: Arc<Mutex<HashMap<(String, &'static str), Instant>>>,
     search_cache: Arc<Mutex<HashMap<String, (Instant, Vec<SearchResult>)>>>,
     ytdlp_sem: Arc<Semaphore>,
@@ -1291,7 +1291,7 @@ async fn stream_audio(
                 r.status()
             );
             if r.status() == StatusCode::FORBIDDEN {
-                demote_stream_source(&state, &q.url).await;
+                demote_stream_source(&state, &q.url, &direct_url).await;
             }
             evict_stream_cache(&state, &q.url).await;
             direct_url = match resolve_stream_url(&state, &q.url).await {
@@ -1388,6 +1388,7 @@ async fn stream_audio(
             let http = state.http.clone();
             let upstream_url = direct_url.clone();
             let cache = state.stream_cache.clone();
+            let relay_state = state.clone();
             let source_key = q.url.clone();
             tokio::spawn(async move {
                 use futures_util::StreamExt;
@@ -1450,7 +1451,11 @@ async fn stream_audio(
                             current = Some(r);
                             next_pos = chunk_end.checked_add(1);
                         }
-                        _ => {
+                        failed => {
+                            if matches!(&failed, Ok(r) if r.status() == StatusCode::FORBIDDEN) {
+                                demote_stream_source(&relay_state, &source_key, &upstream_url)
+                                    .await;
+                            }
                             cache.lock().await.remove(&source_key);
                             let _ = tx
                                 .send(Err(std::io::Error::other("upstream chunk failed")))
@@ -1950,7 +1955,7 @@ async fn resolve_stream_url(
     {
         let mut sources = state.stream_sources.lock().await;
         match strategy_source {
-            Some(source) => sources.insert(url.to_string(), source),
+            Some(source) => sources.insert(url.to_string(), (resolved.clone(), source)),
             None => sources.remove(url),
         };
     }
@@ -2139,9 +2144,19 @@ async fn active_demoted_sources(state: &AppState, source_url: &str) -> Vec<&'sta
 /// strategy for this video for a while so the re-resolve falls through to the
 /// next one. Scoped per video so one gated or quirky video cannot push every
 /// other stream off the preferred strategy.
-async fn demote_stream_source(state: &AppState, source_url: &str) {
-    let Some(source) = state.stream_sources.lock().await.remove(source_url) else {
-        return;
+async fn demote_stream_source(state: &AppState, source_url: &str, failed_url: &str) {
+    let source = {
+        let mut sources = state.stream_sources.lock().await;
+        // A concurrent request may already have re-resolved this video; only
+        // blame the strategy that produced the URL that actually failed.
+        match sources.get(source_url) {
+            Some((direct_url, source)) if direct_url == failed_url => {
+                let source = *source;
+                sources.remove(source_url);
+                source
+            }
+            _ => return,
+        }
     };
     warn!(
         "demoting resolver strategy {source} for {source_url} for {}s after mid-stream rejection",
