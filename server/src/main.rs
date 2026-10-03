@@ -3379,7 +3379,7 @@ mod tests {
         std::fs::remove_file(&invocations).unwrap();
 
         assert_eq!(first.unwrap().source, "legacy-default");
-        assert_eq!(calls_after_first, 4);
+        assert_eq!(calls_after_first, resolver_strategy_specs().len());
         assert_eq!(second.unwrap().source, "legacy-default");
         assert_eq!(calls_after_second - calls_after_first, 1);
     }
