@@ -1398,6 +1398,9 @@ async fn stream_audio(
             tokio::spawn(async move {
                 use futures_util::StreamExt;
                 let expected_total = content_range_total(&first);
+                // At most one re-resolve per relay, so a video every strategy
+                // cuts off cannot loop through resolves chunk after chunk.
+                let mut healed = false;
                 let mut current = Some(first);
                 let mut next_pos = first_end.checked_add(1);
                 'relay: while let Some(resp) = current.take() {
@@ -1450,7 +1453,8 @@ async fn stream_audio(
                     // The client already has 206 headers for the whole range, so
                     // a strategy cut-off mid-relay must be healed in place: demote
                     // it, re-resolve, and continue the same range from the new URL.
-                    if matches!(&attempt, Ok(r) if r.status() == StatusCode::FORBIDDEN) {
+                    if !healed && matches!(&attempt, Ok(r) if r.status() == StatusCode::FORBIDDEN) {
+                        healed = true;
                         demote_stream_source(&relay_state, &source_key, &upstream_url).await;
                         evict_stream_cache(&relay_state, &source_key).await;
                         match resolve_stream_url(&relay_state, &source_key).await {
